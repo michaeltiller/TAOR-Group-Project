@@ -29,7 +29,7 @@ def filter_vet_data():
     # DPT Data
     print("Filtering DPT Data...")
     dpt_vet = data.dpt[data.dpt["Programme School Name"] == VET_SCHOOL]
-    dpt_vet.to_excel(OUT_DIR / "2024-5 DPT DATA.xlsx", index=False)
+    dpt_vet.to_excel(OUT_DIR / "2024-5 DPT Data.xlsx", index=False)
 
     # Events
     print("Filtering events...")
