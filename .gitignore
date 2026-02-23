@@ -2,4 +2,4 @@ Data/
 .venv/
 venv/
 plots/
-
+*.png
