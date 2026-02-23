@@ -1,40 +1,19 @@
 """
-Build 2 week timetable view
-=====================================
-Load data, and build two week timetable
-
+Build a 2-Week Timetable View for the Vet School
+=================================================
+Loads vet-filtered data, filters events to a configurable 2-week window,
+adds room details and a Core (compulsory) flag, and outputs an Excel file.
 """
 
-from data_loader import TimetablingData
-import pandas as pd
-from pathlib import Path
 import argparse
+import pandas as pd
+from data_loader import TimetablingData
+from eda_visualizations import main as run_eda
+from utils import parse_weeks, VET_DATA_DIR
 
 
-def parse_weeks(weeks_value) -> set[int]:
-    """Parse a weeks cell (int or comma seperated str) into a set"""
-    if pd.isna(weeks_value):
-        return set()
-    s = str(weeks_value).strip()
-    weeks = set()
-
-    for part in s.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            low, high = part.split("-", 1)
-            weeks.update(range(int(low), int(high) + 1))
-        else:
-            weeks.add(int(part))
-
-    return weeks
-
-
-def build_timetable(
-    start_week: int = 9, data_path: str = "Data/vet", save: bool = True
-):
-    data_dir = Path(str(data_path))
+def build_timetable(start_week: int = 9):
+    data_dir = VET_DATA_DIR
     data = TimetablingData(data_dir=str(data_dir))
     data.load_all()
 
@@ -42,32 +21,33 @@ def build_timetable(
     prog_course = data.prog_course
     rooms = data.rooms
 
-    # Parse weeks and filter to 2-week window
+    # --- 1. Parse weeks and filter to the 2-week window ---
     target_weeks = {start_week, start_week + 1}
     events = events.copy()
     events["_parsed_weeks"] = events["Weeks"].apply(parse_weeks)
     events = events[events["_parsed_weeks"].apply(lambda ws: bool(ws & target_weeks))]
-    events = events.drop(columns="_parsed_weeks")
+    events = events.drop(columns=["_parsed_weeks"])
 
-    print(f"Events in week {start_week}-{start_week + 1}: {len(events)}")
+    print(f"Events in weeks {start_week}-{start_week + 1}: {len(events)}")
 
-    # Add core flag
+    # --- 2. Add Core flag via Programme-Course ---
     compulsory_modules = set(
         prog_course.loc[prog_course["Compulsory"] == True, "ModuleId"]
     )
+    events = events.copy()
     events["Core"] = events["Module Code"].isin(compulsory_modules)
 
-    # Room info
+    # --- 3. Join room capacity from rooms table ---
     room_info = rooms[["Id", "Capacity", "Room Type"]].rename(
         columns={
             "Id": "Room",
-            "Capacity": "Room_Capacity",
+            "Capacity": "Room Capacity",
             "Room Type": "Room Type (detail)",
         }
     )
     events = events.merge(room_info, on="Room", how="left")
 
-    # Output columns
+    # --- 4. Select output columns ---
     output_cols = [
         "Event ID",
         "Event Name",
@@ -86,44 +66,37 @@ def build_timetable(
         "Room Type (detail)",
         "Core",
     ]
+    # Keep only columns that exist
+    output_cols = [c for c in output_cols if c in events.columns]
+    result = events[output_cols]
 
-    result = events[[c for c in output_cols if c in events.columns]]
-    print("Dropped:", set(output_cols) - set(events.columns))
+    # --- 5. Save ---
+    end_week = start_week + 1
+    out_path = data_dir / f"timetable_weeks_{start_week}_{end_week}.xlsx"
+    result.to_excel(out_path, index=False)
+    print(f"Saved to {out_path}")
 
-    # Save data
-    if save:
-        out_path = (
-            Path(data_dir) / f"timetable_weeks_{start_week}_{start_week + 1}.xlsx"
-        )
-        result.to_excel(out_path, index=False)
-        print(f"Saved to {out_path}")
+    # Run EDA on the timetable
+    run_eda(result)
+
+    # Summary
+    print(f"\nSummary:")
+    print(f"  Events: {len(result)}")
+    print(f"  Unique modules: {result['Module Code'].nunique()}")
+    print(f"  Core events: {result['Core'].sum()}")
+    print(f"  Non-core events: {(~result['Core']).sum()}")
+    print(f"  Events with room: {result['Room'].notna().sum()}")
 
     return result
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build 2 week timetable")
-
+    parser = argparse.ArgumentParser(description="Build vet school 2-week timetable")
     parser.add_argument(
-        "--start_week",
+        "--start-week",
         type=int,
         default=9,
-        help="Week to start from (default: 9)",
+        help="First week of the 2-week window (default: 9)",
     )
-    parser.add_argument(
-        "--data_path",
-        type=str,
-        default="Data/vet",
-        help="Data path to pull from",
-    )
-    parser.add_argument(
-        "--save",
-        type=bool,
-        default=True,
-        help="Save output (bool)",
-    )
-
     args = parser.parse_args()
-    build_timetable(
-        start_week=args.start_week, data_path=args.data_path, save=args.save
-    )
+    build_timetable(start_week=args.start_week)

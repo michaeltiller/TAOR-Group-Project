@@ -1,19 +1,12 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Created on Wed Feb  4 14:57:10 2026
-
-@author: michael
-
-Filter Timetabling Data for Vet School
-==================================================
-Read all 5 excel files via TimetablingData, filter rows
-and save result to Data/vet
+Filter University Timetabling Data for the Royal (Dick) School of Veterinary Studies
+=====================================================================================
+Reads all 5 Excel files via TimetablingData, filters rows belonging to the vet school,
+and saves the results to Data/vet/.
 """
 
-from pathlib import Path
 from data_loader import TimetablingData
-
+from pathlib import Path
 
 VET_SCHOOL = "Royal (Dick) School of Veterinary Studies"
 VET_BUILDING = "Vet School"
@@ -26,38 +19,42 @@ def filter_vet_data():
     data = TimetablingData()
     data.load_all()
 
-    # DPT Data
+    # 1. DPT Data
     print("Filtering DPT Data...")
     dpt_vet = data.dpt[data.dpt["Programme School Name"] == VET_SCHOOL]
     dpt_vet.to_excel(OUT_DIR / "2024-5 DPT Data.xlsx", index=False)
+    print(f"  {len(dpt_vet):,} / {len(data.dpt):,} rows")
 
-    # Events
-    print("Filtering events...")
+    # 2. Event Module Room
+    print("Filtering Event Module Room...")
     events_vet = data.events[data.events["Module Department"] == VET_SCHOOL]
     events_vet.to_excel(OUT_DIR / "2024-5 Event Module Room.xlsx", index=False)
+    print(f"  {len(events_vet):,} / {len(data.events):,} rows")
 
-    # Student Programme
-    print("Filtering Student Programme...")
+    # 3. Student Programme Module Event
+    print("Filtering Student Programme Module Event...")
     enrol_vet = data.enrollments[data.enrollments["Department"] == VET_SCHOOL]
     enrol_vet.to_excel(
         OUT_DIR / "2024-5 Student Programme Module Event.xlsx", index=False
     )
+    print(f"  {len(enrol_vet):,} / {len(data.enrollments):,} rows")
 
-    # Programme Course (no dep, join via DPT)
-    print("Filtering Programme-Course")
+    # 4. Programme-Course (no department column — join via DPT programme codes)
+    print("Filtering Programme-Course...")
     vet_prog_codes = set(dpt_vet["Programme Code"].unique())
     prog_code_col = data.prog_course["CourseId"].str.extract(r"^(.+?)_YR")[0]
     pc_vet = data.prog_course[prog_code_col.isin(vet_prog_codes)]
     pc_vet.to_excel(OUT_DIR / "Programme-Course.xlsx", index=False)
+    print(f"  {len(pc_vet):,} / {len(data.prog_course):,} rows")
 
-    # Rooms
-    print("Filtering Rooms")
+    # 5. Rooms and Room Types
+    print("Filtering Rooms...")
     rooms_vet = data.rooms[data.rooms["Building.1"].astype(str) == VET_BUILDING]
     rooms_vet.to_excel(OUT_DIR / "Rooms and Room Types.xlsx", index=False)
+    print(f"  {len(rooms_vet):,} / {len(data.rooms):,} rows")
 
-    print(f"Done - filtered files saved to {OUT_DIR}")
+    print(f"\nDone — filtered files saved to {OUT_DIR}/")
 
 
 if __name__ == "__main__":
     filter_vet_data()
-
