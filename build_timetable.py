@@ -8,7 +8,7 @@ adds room details and a Core (compulsory) flag, and outputs an Excel file.
 import argparse
 import pandas as pd
 from data_loader import TimetablingData
-from eda_visualizations import main as run_eda
+from visualisation import main as run_eda
 from utils import parse_weeks, VET_DATA_DIR
 
 
