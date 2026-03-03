@@ -1,3 +1,10 @@
+# Deliverable for Mid Project Report
+
+- All data loading and preprocessing functions and pipelines have been completed
+- Model for Vet School is implemented in main.py; however is infeasible.
+- Currently working on simplifying the code and formulation to solve the infeasibility issue. 
+
+
 # Vet School Timetabling Pipeline
 
 Data analysis pipeline for the Royal (Dick) School of Veterinary Studies (University of Edinburgh). Part of the TiAOR (Timetabling and Operations Research) course.
