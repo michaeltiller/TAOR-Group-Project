@@ -4,3 +4,4 @@ venv/
 plots/
 *.png
 timetabler/__pycache__/
+proposedTimetable/
