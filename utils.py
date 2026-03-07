@@ -19,31 +19,9 @@ VET_DATA_DIR = DATA_DIR / "vet"
 PLOTS_DIR = Path("plots")
 
 # --- Scheduling constants ---
-DAY_ORDER = [
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
-]
-HOUR_ORDER = [
-    "08:00",
-    "09:00",
-    "10:00",
-    "11:00",
-    "12:00",
-    "13:00",
-    "14:00",
-    "15:00",
-    "16:00",
-    "17:00",
-    "18:00",
-    "19:00",
-    "20:00",
-    "21:00",
-]
+DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+HOUR_ORDER = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00',
+              '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00']
 
 
 def parse_weeks(weeks_value) -> set:
@@ -76,10 +54,21 @@ def parse_timeslot(timeslot):
     """
     if pd.isna(timeslot):
         return None, None
-    parts = str(timeslot).split(" ")
+    parts = str(timeslot).split(' ')
     if len(parts) >= 2:
         return parts[0], parts[1]
     return None, None
+
+
+def timeslot_sort_key(ts):
+    """Return a (day_index, hour_str) sort key for a timeslot string.
+
+    Uses DAY_ORDER for day ranking. Unknown days sort last (index 99).
+    Example: timeslot_sort_key('Wednesday 09:00') -> (2, '09:00')
+    """
+    day, hour = parse_timeslot(ts)
+    day_idx = DAY_ORDER.index(day) if day is not None and day in DAY_ORDER else 99
+    return (day_idx, hour or "")
 
 
 def get_fill_ratio_color(fill_ratio) -> str:
@@ -91,12 +80,12 @@ def get_fill_ratio_color(fill_ratio) -> str:
     NaN   -> grey   (#999999) — no capacity data
     """
     if pd.isna(fill_ratio):
-        return "#999999"
+        return '#999999'
     if fill_ratio > 1.0:
-        return "#e74c3c"
+        return '#e74c3c'
     if fill_ratio >= 0.5:
-        return "#2ecc71"
-    return "#3498db"
+        return '#2ecc71'
+    return '#3498db'
 
 
 def calculate_fill_ratio(event_size, room_capacity) -> float:

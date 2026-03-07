@@ -5,22 +5,20 @@ Loads and provides utilities for analyzing the 2024-5 university timetabling dat
 """
 
 import pandas as pd
-import os
 from pathlib import Path
 
 DATA_DIR = Path("Data")
-
 
 class TimetablingData:
     """Container for university timetabling dataset."""
 
     def __init__(self, data_dir: str = "Data"):
         self.data_dir = Path(data_dir)
-        self.dpt = None  # Degree Programme Table
-        self.events = None  # Event-Module-Room data
-        self.enrollments = None  # Student-Programme-Module-Event data
-        self.prog_course = None  # Programme-Course mapping
-        self.rooms = None  # Rooms and Room Types
+        self.dpt = None           # Degree Programme Table
+        self.events = None        # Event-Module-Room data
+        self.enrollments = None   # Student-Programme-Module-Event data
+        self.prog_course = None   # Programme-Course mapping
+        self.rooms = None         # Rooms and Room Types
 
     def load_all(self):
         """Load all datasets into memory."""
@@ -33,9 +31,7 @@ class TimetablingData:
         self.events = pd.read_excel(self.data_dir / "2024-5 Event Module Room.xlsx")
 
         print("  - Student Programme Module Event (enrollments)...")
-        self.enrollments = pd.read_excel(
-            self.data_dir / "2024-5 Student Programme Module Event.xlsx"
-        )
+        self.enrollments = pd.read_excel(self.data_dir / "2024-5 Student Programme Module Event.xlsx")
 
         print("  - Programme-Course mapping...")
         self.prog_course = pd.read_excel(self.data_dir / "Programme-Course.xlsx")
@@ -44,6 +40,26 @@ class TimetablingData:
         self.rooms = pd.read_excel(self.data_dir / "Rooms and Room Types.xlsx")
 
         print("All datasets loaded!\n")
+        return self
+
+    def load_scheduling(self):
+        """Load only the three datasets required for timetable scheduling.
+
+        Loads Events, Rooms, and Programme-Course — skips the large DPT (~15 MB)
+        and Enrollments (~31 MB) files that are not needed for the MILP model.
+        """
+        print("Loading scheduling datasets...")
+
+        print("  - Event Module Room (scheduling)...")
+        self.events = pd.read_excel(self.data_dir / "2024-5 Event Module Room.xlsx")
+
+        print("  - Programme-Course mapping...")
+        self.prog_course = pd.read_excel(self.data_dir / "Programme-Course.xlsx")
+
+        print("  - Rooms and Room Types...")
+        self.rooms = pd.read_excel(self.data_dir / "Rooms and Room Types.xlsx")
+
+        print("Scheduling datasets loaded!\n")
         return self
 
     def summary(self):
@@ -77,9 +93,7 @@ class TimetablingData:
             print("ROOM STATISTICS:")
             print(f"  Total rooms: {self.rooms.shape[0]}")
             print(f"  Campuses: {self.rooms['Campus'].unique().tolist()}")
-            print(
-                f"  Capacity range: {self.rooms['Capacity'].min()} - {self.rooms['Capacity'].max()}"
-            )
+            print(f"  Capacity range: {self.rooms['Capacity'].min()} - {self.rooms['Capacity'].max()}")
             print(f"  Room types: {self.rooms['Room Type'].unique().tolist()}")
 
         if self.enrollments is not None:
@@ -93,33 +107,29 @@ class TimetablingData:
         """Extract unique timeslots from events."""
         if self.events is None:
             return None
-        return sorted(self.events["Timeslot"].dropna().unique().tolist())
+        return sorted(self.events['Timeslot'].dropna().unique().tolist())
 
     def get_events_by_module(self, module_code: str):
         """Get all events for a specific module."""
         if self.events is None:
             return None
-        return self.events[
-            self.events["Module Code"].str.contains(module_code, na=False)
-        ]
+        return self.events[self.events['Module Code'].str.contains(module_code, na=False)]
 
-    def get_room_by_capacity(self, min_capacity: int, max_capacity: int = None):
+    def get_room_by_capacity(self, min_capacity: int, max_capacity: int | None = None):
         """Get rooms within a capacity range."""
         if self.rooms is None:
             return None
-        mask = self.rooms["Capacity"] >= min_capacity
+        mask = self.rooms['Capacity'] >= min_capacity
         if max_capacity:
-            mask &= self.rooms["Capacity"] <= max_capacity
+            mask &= self.rooms['Capacity'] <= max_capacity
         return self.rooms[mask]
 
     def get_student_schedule(self, student_id: str):
         """Get all events for a specific student."""
         if self.enrollments is None or self.events is None:
             return None
-        student_events = self.enrollments[self.enrollments["AnonID"] == student_id][
-            "Event ID"
-        ].tolist()
-        return self.events[self.events["Event ID"].isin(student_events)]
+        student_events = self.enrollments[self.enrollments['AnonID'] == student_id]['Event ID'].tolist()
+        return self.events[self.events['Event ID'].isin(student_events)]
 
 
 if __name__ == "__main__":
@@ -133,7 +143,8 @@ if __name__ == "__main__":
     print("TIMESLOT DISTRIBUTION")
     print("=" * 60)
     timeslots = data.get_timeslots()
-    print(f"Total unique timeslots: {len(timeslots)}")
-    print("\nSample timeslots:")
-    for ts in timeslots[:10]:
-        print(f"  {ts}")
+    if timeslots is not None:
+        print(f"Total unique timeslots: {len(timeslots)}")
+        print("\nSample timeslots:")
+        for ts in timeslots[:10]:
+            print(f"  {ts}")
