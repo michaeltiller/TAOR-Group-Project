@@ -3,3 +3,4 @@ Data/
 venv/
 plots/
 *.png
+timetabler/__pycache__/
