@@ -15,6 +15,34 @@ data = TimetablingData()
 data.load_all()
 all_schools = data.events["Module Department"].dropna().unique()
 
+
+SchoolCampusDict = {
+    'Business School': 'Central',
+    'School of Engineering': "King's Buildings",
+    'Edinburgh College of Art': 'Lauriston',
+    'School of Mathematics': "King's Buildings",
+    'Centre for Open Learning': 'Central',
+    'School of Economics': 'Central',
+    'School of Health in Social Science': 'Central',
+    'School of Informatics': "King's Buildings",
+    'Edinburgh Futures Institute': 'Central',
+    'School of Geosciences': "King's Buildings",
+    'School of Physics and Astronomy': "King's Buildings",
+    'School of Social and Political Science': 'Central',
+    'School of Philosophy, Psychology and Language Sciences': 'Central',
+    'Moray House School of Education and Sport': 'Holyrood',
+    'School of Law': 'Central',
+    'School of Literatures, Languages and Cultures': 'Central',
+    'School of Neurological and Cardiovascular Sciences': 'Bioquarter',
+    'School of Biological Sciences': "King's Buildings",
+    'School of Chemistry': "King's Buildings",
+    'School of History, Classics and Archaeology': 'Central',
+    'School of Population Health Sciences': 'Bioquarter',
+    'School of Divinity': 'New College',
+    'Edinburgh Medical School': 'Western General',
+    'Royal (Dick) School of Veterinary Studies': 'Easter Bush'}
+
+
 def filter_data(school: str):
     OUT_DIR = Path("Data") / school
 
@@ -49,10 +77,12 @@ def filter_data(school: str):
     print(f"  {len(pc):,} / {len(data.prog_course):,} rows")
 
     # 5. Rooms and Room Types
-    # print("Filtering Rooms...")
-    # rooms_vet = data.rooms[data.rooms["Building.1"].astype(str) == VET_BUILDING]
-    # rooms_vet.to_excel(OUT_DIR / "Rooms and Room Types.xlsx", index=False)
-    # print(f"  {len(rooms_vet):,} / {len(data.rooms):,} rows")
+    print("Filtering Rooms...")
+    # Should be doing by camus not building
+    #rooms_vet = data.rooms[data.rooms["Building.1"].astype(str) == VET_BUILDING]
+    rooms_vet = data.rooms[data.rooms["Campus"].astype(str) == SchoolCampusDict[school] ]
+    rooms_vet.to_excel(OUT_DIR / "Rooms and Room Types.xlsx", index=False)
+    print(f"  {len(rooms_vet):,} / {len(data.rooms):,} rows")
 
 
     print(f"{all_schools.tolist().index(school)+1}/{len(all_schools)} Done — filtered files saved to {OUT_DIR}/\n")
