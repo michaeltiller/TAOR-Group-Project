@@ -8,6 +8,7 @@ Exposes:
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -21,12 +22,15 @@ class TimetablerSets:
     T: list                     # sorted timeslot strings
     K_Y: dict                   # {year_str: set(event_ids)}
     room_cap: dict              # {room_id: capacity}
+    room_type: dict             # {room_id: room_type}
     fixed_vet: dict             # {event_id: [(room, ts), ...]}
     fixed_non_vet: dict         # {event_id: [(room, ts), ...]}
     locked_occupancy: dict      # {(r, t): count}
     locked_core_classes: dict   # {(year, t): set(module_codes)}
     event_module: dict          # {event_id: module_code}
     event_size: dict            # {event_id: size}
+    event_room_type: dict       # Type of room required 
+    event_room_lock: dict
     core_modules_Y: dict        # {year: list of core module codes}
     events: pd.DataFrame        # week-filtered events
     events_raw: pd.DataFrame    # for metadata joins in SolutionExtractor
@@ -59,6 +63,9 @@ def build_sets_from_frames(
     room_cap = (
         rooms_raw.dropna(subset=["Id"]).set_index("Id")["Capacity"].to_dict()
     )
+    
+    room_type = (rooms_raw.dropna(subset=["Id"]).set_index("Id")["Specialist room type"].to_dict()) 
+    
     vet_room_set = set(R)
 
     # --- Week-filter events ---
@@ -82,10 +89,45 @@ def build_sets_from_frames(
             .set_index("Event ID")["Event Size"]
         )
         event_size = size_series.to_dict()
+        
+    
+    event_room_type =  (
+        events[["Event ID", "Room type 2"]]
+        .drop_duplicates(subset="Event ID")
+        .set_index("Event ID")["Room type 2"]
+    ).to_dict()
+    
+    event_room_lock = (
+        events[["Event ID", "Room Lock"]]
+        .drop_duplicates(subset="Event ID")
+        .set_index("Event ID")["Room Lock"]
+    ).to_dict()
 
     # --- T: sorted timeslots from the FULL raw dataset ---
-    all_ts = events_raw["Timeslot"].dropna().unique().tolist()
-    T = sorted(all_ts, key=timeslot_sort_key)
+    # all_ts = events_raw["Timeslot"].dropna().unique().tolist()
+    
+    
+    
+    # T = sorted(all_ts, key=timeslot_sort_key)
+    
+    
+    # --- T: Use a fixed timetalbe not dependent on data 
+    
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+    start_time = "08:30" 
+    end_time = "18:00"
+    
+    T = []
+    
+    for day in days:
+        current = datetime.strptime(start_time, "%H:%M")
+        end = datetime.strptime(end_time, "%H:%M")
+        
+        while current <= end:
+            T.append(f"{day} {current.strftime('%H:%M')}")
+            current += timedelta(minutes=30)
+    
 
     # --- K_Y: compulsory events grouped by year ---
     comp = pc_raw[pc_raw["Compulsory"]].copy()
@@ -177,12 +219,15 @@ def build_sets_from_frames(
         T=T,
         K_Y=K_Y,
         room_cap=room_cap,
+        room_type = room_type,
         fixed_vet=fixed_vet,
         fixed_non_vet=fixed_non_vet,
         locked_occupancy=locked_occupancy,
         locked_core_classes=locked_core_classes,
         event_module=event_module,
         event_size=event_size,
+        event_room_type = event_room_type,
+        event_room_lock = event_room_lock,
         core_modules_Y=core_modules_Y,
         events=events,
         events_raw=events_raw,
