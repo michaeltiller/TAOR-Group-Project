@@ -171,6 +171,19 @@ def room_compatible(e, r, s):
         return True
 
 
+def room_feasible(e, r, s):
+    """Room compatible AND capacity reasonable (hard overflow filter)."""
+    if not room_compatible(e, r, s):
+        return False
+    size = s.event_size.get(e, 0)
+    cap = s.room_cap.get(r, 0)
+    if pd.isna(size) or pd.isna(cap):
+        return True  # can't filter, allow
+    if cap < size:
+        return False  # hard overflow — event can't fit
+    return True
+
+
 def overflow(e, r, s):
     size = s.event_size.get(e, 0)
     cap = s.room_cap.get(r, 0)
@@ -281,8 +294,15 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     prob.controls.outputlog = 0
 
     # ==========================================================================
-    # Decision Variables
+    # Decision Variables (pre-filtered by room feasibility)
     # ==========================================================================
+    # Pre-compute feasible rooms per event (compatibility + capacity)
+    compatible_rooms = {
+        e: [r for r in R if room_feasible(e, r, s)]
+        for e in E
+    }
+    n_unfiltered = len(E) * len(available_rt)
+
     # x[e, r, t] = 1 if event e assigned to room r at timeslot t
     x = {
         (e, r, t): prob.addVariable(
@@ -290,10 +310,18 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
             name=f"x{e_idx[e]}_{r_idx[r]}_{t_idx[t]}"
         )
         for e in E
-        for r, t in available_rt
+        for r in compatible_rooms[e]
+        for t in T
+        if s.locked_occupancy.get((r, t), 0) == 0
     }
+    compression = (1 - len(x) / n_unfiltered) * 100 if n_unfiltered else 0
+    print(f"  Variables: {len(x):,} (was {n_unfiltered:,} unfiltered, {compression:.1f}% reduction)")
 
-    # Z[module, t] = 1 if module has any event scheduled at timeslot t (for C2)
+    # ==========================================================================
+    # Auxiliary variables for C2 (aggregated formulation)
+    # ==========================================================================
+    # y[e, t] ∈ {0,1} = 1 if event e is assigned to timeslot t (any room)
+    # Reduces C2 linking from O(|events_m| × |rooms|) to O(|events_m|) per timeslot
     all_core_modules = {m for mods in s.core_modules_Y.values() for m in mods}
     m_idx = {m: i for i, m in enumerate(sorted(all_core_modules))}
 
@@ -303,26 +331,35 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
         if any(s.event_module.get(e) == m for e in E)
     }
 
+    # Collect which core events need y variables
+    core_event_set = {e for evs in free_module_events.values() for e in evs}
+
+    y = {}
+    for e in core_event_set:
+        for t in T:
+            vars_et = [x[(e, r, t)] for r in compatible_rooms[e] if (e, r, t) in x]
+            if vars_et:
+                y[(e, t)] = prob.addVariable(
+                    vartype=xp.binary,
+                    name=f"y{e_idx[e]}_{t_idx[t]}"
+                )
+
+    # Z[module, t] = 1 if module has any event scheduled at timeslot t
     Z = {}
     for m, evs in free_module_events.items():
         for t in T:
-            vars_mt = [x[(e, r, t)] for e in evs for r in R if (e, r, t) in x]
-            if vars_mt:
+            if any((e, t) in y for e in evs):
                 Z[(m, t)] = prob.addVariable(
                     vartype=xp.binary,
                     name=f"z{m_idx[m]}_{t_idx[t]}"
                 )
 
-    # Room compatibility matrix
-    compat = {
-        (e, r): int(room_compatible(e, r, s))
-        for e in E
-        for r in R
-    }
+    print(f"  Auxiliary vars: {len(y):,} y[e,t] + {len(Z):,} Z[m,t]")
 
     # ==========================================================================
     # Constraints
     # ==========================================================================
+    n_constraints = 0
 
     # C1 — Room conflict: at most one event per (room, timeslot)
     for r in R:
@@ -332,15 +369,26 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
             vars_rt = [x[(e, r, t)] for e in E if (e, r, t) in x]
             if len(vars_rt) > 1:
                 prob.addConstraint(xp.Sum(vars_rt) <= 1)
+                n_constraints += 1
 
-    # C2 — Core-class conflict: at most one compulsory class per (year, timeslot)
-    # Linking: Z[m, t] >= x[e, r, t] for all events e of module m
+    c1_count = n_constraints
+
+    # C2 — Core-class conflict (aggregated via y[e,t])
+    # Linking y: y[e,t] = sum_r x[e,r,t] for core events
+    for (e, t), y_var in y.items():
+        vars_et = [x[(e, r, t)] for r in compatible_rooms[e] if (e, r, t) in x]
+        prob.addConstraint(xp.Sum(vars_et) == y_var)
+        n_constraints += 1
+
+    # Linking Z: Z[m,t] >= y[e,t] for events e of module m
     for m, evs in free_module_events.items():
         for t in T:
             if (m, t) not in Z:
                 continue
-            vars_mt = [x[(e, r, t)] for e in evs for r in R if (e, r, t) in x]
-            prob.addConstraint([Z[(m, t)] >= v for v in vars_mt])
+            for e in evs:
+                if (e, t) in y:
+                    prob.addConstraint(Z[(m, t)] >= y[(e, t)])
+                    n_constraints += 1
 
     # Year-level: sum of Z[m, t] over core modules of year <= 1
     for year, modules in s.core_modules_Y.items():
@@ -350,29 +398,34 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
             z_vars_yt = [Z[(m, t)] for m in modules if (m, t) in Z and m not in locked_cls]
             rhs = 1 - n_locked
             if rhs <= 0:
-                prob.addConstraint([z_v <= 0 for z_v in z_vars_yt])
+                for z_v in z_vars_yt:
+                    prob.addConstraint(z_v <= 0)
+                    n_constraints += 1
             elif z_vars_yt:
                 prob.addConstraint(xp.Sum(z_vars_yt) <= rhs)
+                n_constraints += 1
+
+    c2_count = n_constraints - c1_count
 
     # C3 — Assignment: each event assigned to exactly one (room, timeslot)
     for e in E:
-        vars_e = [x[(e, r, t)] for r in R for t in T if (e, r, t) in x]
+        vars_e = [x[(e, r, t)] for r in compatible_rooms[e] for t in T if (e, r, t) in x]
         if vars_e:
             prob.addConstraint(xp.Sum(vars_e) == 1)
+            n_constraints += 1
         else:
             print(f"  WARNING: Event {e} has no feasible (Room, Timeslot) — model will be infeasible")
 
-    # Room compatibility: x[e, r, t] <= compat[e, r]
-    for (e, r, t), var in x.items():
-        prob.addConstraint(var <= compat[(e, r)])
+    c3_count = n_constraints - c1_count - c2_count
+    print(f"  Constraints: C1={c1_count:,}, C2={c2_count:,}, C3={c3_count:,}, total={n_constraints:,}")
 
     # ==========================================================================
     # Objective Function
     # ==========================================================================
     prob.setObjective(
         xp.Sum(
-            x[e, r, t] * (p[t_idx[t]] + lambda_cap * overflow(e, r, s) + lambda_underut * underutilising(e, r, s))
-            for e in E for r in R for t in T if (e, r, t) in x
+            var * (p[t_idx[t]] + lambda_cap * overflow(e, r, s) + lambda_underut * underutilising(e, r, s))
+            for (e, r, t), var in x.items()
         ),
         sense=xp.minimize
     )
