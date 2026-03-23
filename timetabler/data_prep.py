@@ -29,7 +29,8 @@ class TimetablerSets:
     locked_core_classes: dict   # {(year, t): set(module_codes)}
     event_module: dict          # {event_id: module_code}
     event_size: dict            # {event_id: size}
-    event_room_type: dict       # Type of room required 
+    event_duration: dict        # {event_id: duration_minutes}
+    event_room_type: dict       # Type of room required
     event_room_lock: dict
     core_modules_Y: dict        # {year: list of core module codes}
     events: pd.DataFrame        # week-filtered events
@@ -89,6 +90,15 @@ def build_sets_from_frames(
             .set_index("Event ID")["Event Size"]
         )
         event_size = size_series.to_dict()
+
+    event_duration: dict = {}
+    if "Duration (minutes)" in events.columns:
+        dur_series = (
+            events[["Event ID", "Duration (minutes)"]]
+            .drop_duplicates(subset="Event ID")
+            .set_index("Event ID")["Duration (minutes)"]
+        )
+        event_duration = dur_series.to_dict()
         
     
     event_room_type =  (
@@ -126,7 +136,7 @@ def build_sets_from_frames(
         
         while current <= end:
             T.append(f"{day} {current.strftime('%H:%M')}")
-            current += timedelta(minutes=30)
+            current += timedelta(hours=1)
     
 
     # --- K_Y: compulsory events grouped by year ---
@@ -226,7 +236,8 @@ def build_sets_from_frames(
         locked_core_classes=locked_core_classes,
         event_module=event_module,
         event_size=event_size,
-        event_room_type = event_room_type,
+        event_duration=event_duration,
+        event_room_type=event_room_type,
         event_room_lock = event_room_lock,
         core_modules_Y=core_modules_Y,
         events=events,

@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import math
 from pathlib import Path
 
 import numpy as np
@@ -279,13 +280,13 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     e_idx = {e: i for i, e in enumerate(E)}
     r_idx = {r: i for i, r in enumerate(R)}
     t_idx = {t: i for i, t in enumerate(T)}
+    T_day = [t.split()[0] for t in T]
 
-    available_rt = [
-        (r, t)
-        for r in R
-        for t in T
-        if s.locked_occupancy.get((r, t), 0) == 0
-    ]
+    # Number of 1-hour slots each event needs (duration rounded up to nearest hour)
+    n_slots = {
+        e: max(1, math.ceil(s.event_duration.get(e, 60) / 60))
+        for e in E
+    }
 
     # ==========================================================================
     # Initialise Model
@@ -301,9 +302,21 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
         e: [r for r in R if room_feasible(e, r, s)]
         for e in E
     }
-    n_unfiltered = len(E) * len(available_rt)
 
-    # x[e, r, t] = 1 if event e assigned to room r at timeslot t
+    # Valid start timeslots per event: must not cross a day boundary
+    valid_start_slots = {
+        e: [
+            t for ti, t in enumerate(T)
+            if ti + n_slots[e] <= len(T)
+            and T_day[ti] == T_day[ti + n_slots[e] - 1]
+        ]
+        for e in E
+    }
+
+    n_unfiltered = sum(len(valid_start_slots[e]) * len(compatible_rooms[e]) for e in E)
+
+    # x[e, r, t] = 1 if event e STARTS at timeslot t in room r
+    # Only created where all n_slots[e] consecutive slots are unlocked for room r
     x = {
         (e, r, t): prob.addVariable(
             vartype=xp.binary,
@@ -311,8 +324,11 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
         )
         for e in E
         for r in compatible_rooms[e]
-        for t in T
-        if s.locked_occupancy.get((r, t), 0) == 0
+        for t in valid_start_slots[e]
+        if all(
+            s.locked_occupancy.get((r, T[t_idx[t] + k]), 0) == 0
+            for k in range(n_slots[e])
+        )
     }
     compression = (1 - len(x) / n_unfiltered) * 100 if n_unfiltered else 0
     print(f"  Variables: {len(x):,} (was {n_unfiltered:,} unfiltered, {compression:.1f}% reduction)")
@@ -334,11 +350,21 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # Collect which core events need y variables
     core_event_set = {e for evs in free_module_events.values() for e in evs}
 
+    # y[e, t] = 1 if event e OCCUPIES timeslot t (started at t or started earlier
+    # and extends to t). Created for each (e, t) where any covering x var exists.
     y = {}
     for e in core_event_set:
-        for t in T:
-            vars_et = [x[(e, r, t)] for r in compatible_rooms[e] if (e, r, t) in x]
-            if vars_et:
+        n = n_slots[e]
+        for ti, t in enumerate(T):
+            # event e occupies slot ti if it started at ti-k for k in [0, n-1]
+            vars_covering = [
+                x[(e, r, T[ti - k])]
+                for k in range(n)
+                if ti - k >= 0
+                for r in compatible_rooms[e]
+                if (e, r, T[ti - k]) in x
+            ]
+            if vars_covering:
                 y[(e, t)] = prob.addVariable(
                     vartype=xp.binary,
                     name=f"y{e_idx[e]}_{t_idx[t]}"
@@ -361,12 +387,18 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # ==========================================================================
     n_constraints = 0
 
-    # C1 — Room conflict: at most one event per (room, timeslot)
+    # C1 — Room conflict: at most one event may occupy each (room, timeslot).
+    # A multi-slot event starting at t' blocks slots t', t'+1, ..., t'+n-1.
     for r in R:
-        for t in T:
+        for ti, t in enumerate(T):
             if s.locked_occupancy.get((r, t), 0) > 0:
                 continue
-            vars_rt = [x[(e, r, t)] for e in E if (e, r, t) in x]
+            vars_rt = [
+                x[(e, r, T[ti - k])]
+                for e in E
+                for k in range(n_slots[e])
+                if ti - k >= 0 and (e, r, T[ti - k]) in x
+            ]
             if len(vars_rt) > 1:
                 prob.addConstraint(xp.Sum(vars_rt) <= 1)
                 n_constraints += 1
@@ -374,10 +406,18 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     c1_count = n_constraints
 
     # C2 — Core-class conflict (aggregated via y[e,t])
-    # Linking y: y[e,t] = sum_r x[e,r,t] for core events
+    # Linking y: y[e,t] = sum of x[e,r,t'] for all starts t' that cover slot t
     for (e, t), y_var in y.items():
-        vars_et = [x[(e, r, t)] for r in compatible_rooms[e] if (e, r, t) in x]
-        prob.addConstraint(xp.Sum(vars_et) == y_var)
+        ti = t_idx[t]
+        n = n_slots[e]
+        vars_covering = [
+            x[(e, r, T[ti - k])]
+            for k in range(n)
+            if ti - k >= 0
+            for r in compatible_rooms[e]
+            if (e, r, T[ti - k]) in x
+        ]
+        prob.addConstraint(xp.Sum(vars_covering) == y_var)
         n_constraints += 1
 
     # Linking Z: Z[m,t] >= y[e,t] for events e of module m
@@ -407,9 +447,9 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
 
     c2_count = n_constraints - c1_count
 
-    # C3 — Assignment: each event assigned to exactly one (room, timeslot)
+    # C3 — Assignment: each event assigned to exactly one start (room, timeslot)
     for e in E:
-        vars_e = [x[(e, r, t)] for r in compatible_rooms[e] for t in T if (e, r, t) in x]
+        vars_e = [x[(e, r, t)] for r in compatible_rooms[e] for t in valid_start_slots[e] if (e, r, t) in x]
         if vars_e:
             prob.addConstraint(xp.Sum(vars_e) == 1)
             n_constraints += 1
