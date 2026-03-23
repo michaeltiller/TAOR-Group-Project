@@ -173,16 +173,8 @@ def room_compatible(e, r, s):
 
 
 def room_feasible(e, r, s):
-    """Room compatible AND capacity reasonable (hard overflow filter)."""
-    if not room_compatible(e, r, s):
-        return False
-    size = s.event_size.get(e, 0)
-    cap = s.room_cap.get(r, 0)
-    if pd.isna(size) or pd.isna(cap):
-        return True  # can't filter, allow
-    if cap < size:
-        return False  # hard overflow — event can't fit
-    return True
+    """Room compatible (capacity overflow is penalised in the objective, not hard-filtered)."""
+    return room_compatible(e, r, s)
 
 
 def overflow(e, r, s):
