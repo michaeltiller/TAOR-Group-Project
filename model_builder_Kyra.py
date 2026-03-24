@@ -106,7 +106,7 @@ class ModelBuilder:
     def _add_c2_core_class_conflict(self, disable_c2_force, quiet) -> int:
         s = self._sets
         c2 = 0
-        all_core_modules = {m for mods in s.core_modules_Y.values() for m in mods}
+        all_core_modules = {m for mods in s.core_modules_YD.values() for m in mods}
         m_idx = {m: i for i, m in enumerate(sorted(all_core_modules))}
 
         free_module_events = {
@@ -133,9 +133,9 @@ class ModelBuilder:
                 self.model.addConstraint([z_var >= v for v in vars_mt])
                 c2 += len(vars_mt)
 
-        for year, modules in s.core_modules_Y.items():
+        for (year, prog), modules in s.core_modules_YD.items():
             for t in s.T:
-                locked_cls = s.locked_core_classes.get((year, t), set())
+                locked_cls = s.locked_core_classes.get((year, prog, t), set())
                 n_locked = len(locked_cls)
                 z_vars_yt = [
                     self._Z[(m, t)]

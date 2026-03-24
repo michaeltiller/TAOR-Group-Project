@@ -96,7 +96,7 @@ x = {
 }
 
 # Z[module, t] = 1 if module has any event scheduled at timeslot t (for C2)
-all_core_modules = {m for mods in s.core_modules_Y.values() for m in mods}
+all_core_modules = {m for mods in s.core_modules_YD.values() for m in mods}
 m_idx = {m: i for i, m in enumerate(sorted(all_core_modules))}
 
 free_module_events = {
@@ -136,9 +136,9 @@ for m, evs in free_module_events.items():
         prob.addConstraint([Z[(m, t)] >= v for v in vars_mt])
 
 # Year-level: sum of Z[m, t] over core modules of year <= 1
-for year, modules in s.core_modules_Y.items():
+for (year, prog), modules in s.core_modules_YD.items():
     for t in T:
-        locked_cls = s.locked_core_classes.get((year, t), set())
+        locked_cls = s.locked_core_classes.get((year, prog, t), set())
         n_locked = len(locked_cls)
         z_vars_yt = [Z[(m, t)] for m in modules if (m, t) in Z and m not in locked_cls]
         rhs = 1 - n_locked

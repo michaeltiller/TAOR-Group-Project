@@ -69,9 +69,13 @@ print(f"Central campus rooms: {len(central_rooms)}")
 print(f"Central campus schools: {len(CENTRAL_CAMPUS_SCHOOLS)}")
 print(f"Target weeks: {sorted(target_weeks)}")
 
-p = pd.read_excel("penaltyTable.xlsx").iloc[:, 1]
-p = np.array(p)
-p = np.append(p, 1000)
+try:
+    p = pd.read_excel("penaltyTable.xlsx").iloc[:, 1]
+    p = np.array(p)
+    p = np.append(p, 1000)
+except FileNotFoundError:
+    print("WARNING: penaltyTable.xlsx not found — using uniform time penalties")
+    p = np.ones(200)  # uniform weights; doesn't affect feasibility
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,15 +106,38 @@ def load_previous_results(out_dir, schools, start_week, n_weeks):
         status = status_file.read_text().strip()
         completed.add(school_idx)
 
-        if status == "optimal":
+        if status in ("optimal", "feasible"):
             sol_file = school_dir / f"solution_{tag}.xlsx"
             if sol_file.exists():
                 df = pd.read_excel(sol_file)
                 assigned = df[df["Source"].isin(["milp", "fixed_vet"])]
+                # Build model T set for slot expansion
+                from datetime import datetime as _dt, timedelta as _td
+                _T = []
+                for _day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+                    _cur = _dt.strptime("08:00", "%H:%M")
+                    _end = _dt.strptime("18:00", "%H:%M")
+                    while _cur <= _end:
+                        _T.append(f"{_day} {_cur.strftime('%H:%M')}")
+                        _cur += _td(hours=1)
+                _t_idx = {t: i for i, t in enumerate(_T)}
                 for _, row in assigned.iterrows():
                     if pd.notna(row["Room"]) and pd.notna(row["Timeslot"]):
-                        key = (str(row["Room"]), str(row["Timeslot"]))
-                        accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
+                        room = str(row["Room"])
+                        start_ts = str(row["Timeslot"])
+                        dur = row.get("Duration (minutes)", 60)
+                        if pd.isna(dur):
+                            dur = 60
+                        n_occ = max(1, math.ceil(dur / 60))
+                        if start_ts in _t_idx:
+                            ti = _t_idx[start_ts]
+                            for k in range(n_occ):
+                                if ti + k < len(_T):
+                                    key = (room, _T[ti + k])
+                                    accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
+                        else:
+                            key = (room, start_ts)
+                            accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
 
     # Restore prior run_log rows if available
     prior_log_rows = []
@@ -176,8 +203,19 @@ def room_compatible(e, r, s):
 
 
 def room_feasible(e, r, s):
-    """Room compatible (capacity overflow is penalised in the objective, not hard-filtered)."""
-    return room_compatible(e, r, s)
+    """Room compatible AND capacity within reasonable range.
+
+    Filters out wildly oversized rooms (>5× event size) to reduce variable count.
+    Rooms up to 5× are kept to allow flexibility; overflow is penalised in objective.
+    """
+    if not room_compatible(e, r, s):
+        return False
+    # Capacity band filter: skip rooms > 5× event size (reduces model size)
+    size = s.event_size.get(e, 0)
+    cap = s.room_cap.get(r, 0)
+    if pd.notna(size) and pd.notna(cap) and size > 0 and cap > 5 * size:
+        return False
+    return True
 
 
 def overflow(e, r, s):
@@ -334,7 +372,7 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # ==========================================================================
     # y[e, t] ∈ {0,1} = 1 if event e is assigned to timeslot t (any room)
     # Reduces C2 linking from O(|events_m| × |rooms|) to O(|events_m|) per timeslot
-    all_core_modules = {m for mods in s.core_modules_Y.values() for m in mods}
+    all_core_modules = {m for mods in s.core_modules_YD.values() for m in mods}
     m_idx = {m: i for i, m in enumerate(sorted(all_core_modules))}
 
     free_module_events = {
@@ -428,9 +466,9 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
                     n_constraints += 1
 
     # Year-level: sum of Z[m, t] over core modules of year <= 1
-    for year, modules in s.core_modules_Y.items():
+    for (year, prog), modules in s.core_modules_YD.items():
         for t in T:
-            locked_cls = s.locked_core_classes.get((year, t), set())
+            locked_cls = s.locked_core_classes.get((year, prog, t), set())
             n_locked = len(locked_cls)
             z_vars_yt = [Z[(m, t)] for m in modules if (m, t) in Z and m not in locked_cls]
             rhs = 1 - n_locked
@@ -444,17 +482,26 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
 
     c2_count = n_constraints - c1_count
 
-    # C3 — Assignment: each event assigned to exactly one start (room, timeslot)
+    # C3 — Assignment: each event assigned to at most one start (room, timeslot)
+    # Soft constraint: unassigned events are penalised heavily in the objective
+    lambda_unassigned = 1_000_000  # huge penalty for not assigning an event
+    slack = {}  # slack[e] = 1 if event e is NOT assigned
+    n_zero_var = 0
     for e in E:
         vars_e = [x[(e, r, t)] for r in compatible_rooms[e] for t in valid_start_slots[e] if (e, r, t) in x]
         if vars_e:
-            prob.addConstraint(xp.Sum(vars_e) == 1)
+            slack[e] = prob.addVariable(vartype=xp.binary, name=f"slack_{e_idx[e]}")
+            prob.addConstraint(xp.Sum(vars_e) + slack[e] == 1)
             n_constraints += 1
         else:
-            print(f"  WARNING: Event {e} has no feasible (Room, Timeslot) — model will be infeasible")
+            n_zero_var += 1
+            print(f"  WARNING: Event {e} has no feasible (Room, Timeslot) — will be unassigned")
 
     c3_count = n_constraints - c1_count - c2_count
     print(f"  Constraints: C1={c1_count:,}, C2={c2_count:,}, C3={c3_count:,}, total={n_constraints:,}")
+    if n_zero_var:
+        print(f"  Events with zero variables (forced unassigned): {n_zero_var}")
+    print(f"  Slack variables (soft C3): {len(slack):,}")
 
     # ==========================================================================
     # Objective Function
@@ -463,7 +510,8 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
         xp.Sum(
             var * (p[t_idx[t]] + lambda_cap * overflow(e, r, s) + lambda_underut * underutilising(e, r, s))
             for (e, r, t), var in x.items()
-        ),
+        )
+        + xp.Sum(lambda_unassigned * sv for sv in slack.values()),
         sense=xp.minimize
     )
 
@@ -473,17 +521,27 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     solvestatus, solstatus = prob.optimize()
     status_map = {
         xp.SolStatus.OPTIMAL: "optimal",
+        xp.SolStatus.FEASIBLE: "feasible",
         xp.SolStatus.INFEASIBLE: "infeasible",
+        xp.SolStatus.NOTFOUND: "notfound",
+        xp.SolStatus.UNBOUNDED: "unbounded",
     }
     solve_status = status_map.get(solstatus, "unknown")
-    print(f"  Solve: {solve_status} (SolveStatus={solvestatus}, SolStatus={solstatus})")
+    solve_status_names = {
+        xp.SolveStatus.COMPLETED: "completed",
+        xp.SolveStatus.STOPPED: "stopped (time/resource limit)",
+        xp.SolveStatus.FAILED: "failed",
+        xp.SolveStatus.UNSTARTED: "unstarted",
+    }
+    print(f"  Solve: {solve_status} (SolveStatus={solve_status_names.get(solvestatus, solvestatus)}, SolStatus={solve_status})")
 
     # ==========================================================================
     # Solution Extraction
     # ==========================================================================
     rows = []
 
-    if solve_status == "optimal":
+    # Accept both optimal and feasible (incumbent) solutions
+    if solve_status in ("optimal", "feasible"):
         var_keys = list(x.keys())
         var_list = list(x.values())
         sol_vals = prob.getSolution(var_list)
@@ -494,6 +552,19 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
                     "Event Size": s.event_size.get(e),
                     "Room Capacity": s.room_cap.get(r),
                 })
+
+        # Report unassigned events (slack = 1)
+        if slack:
+            slack_keys = list(slack.keys())
+            slack_vals = prob.getSolution(list(slack.values()))
+            unassigned = [e for e, val in zip(slack_keys, slack_vals) if val > 0.5]
+            if unassigned:
+                print(f"  ⚠ {len(unassigned)} events UNASSIGNED (out of {len(E)} free events)")
+                for e in unassigned[:10]:
+                    print(f"    Event {e}: size={s.event_size.get(e)}, "
+                          f"room_type='{s.event_room_type.get(e)}'")
+                if len(unassigned) > 10:
+                    print(f"    ... and {len(unassigned) - 10} more")
 
     for e, assignments in s.fixed_vet.items():
         for r, t in assignments:
@@ -536,7 +607,7 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     tag = f"weeks_{start_week}_{start_week + n_weeks - 1}"
     (school_dir / "status.txt").write_text(solve_status)
 
-    if solve_status == "optimal" and not solution_df.empty:
+    if solve_status in ("optimal", "feasible") and not solution_df.empty:
         out_path = school_dir / f"solution_{tag}.xlsx"
         solution_df.to_excel(out_path, index=False)
         print(f"  Saved → {out_path}  ({len(solution_df):,} rows)")
@@ -547,13 +618,29 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # Update accumulated_locked with this school's assignments
     # ==========================================================================
     new_slots = 0
-    if solve_status == "optimal":
+    if solve_status in ("optimal", "feasible"):
         assigned = solution_df[solution_df["Source"].isin(["milp", "fixed_vet"])]
         for _, row in assigned.iterrows():
             if pd.notna(row["Room"]) and pd.notna(row["Timeslot"]):
-                key = (str(row["Room"]), str(row["Timeslot"]))
-                accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
-                new_slots += 1
+                room = str(row["Room"])
+                start_ts = str(row["Timeslot"])
+                # Lock ALL occupied slots (not just the start slot)
+                dur = row.get("Duration (minutes)", 60)
+                if pd.isna(dur):
+                    dur = 60
+                n_occ = max(1, math.ceil(dur / 60))
+                if start_ts in t_idx:
+                    ti_start = t_idx[start_ts]
+                    for k in range(n_occ):
+                        if ti_start + k < len(T):
+                            key = (room, T[ti_start + k])
+                            accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
+                            new_slots += 1
+                else:
+                    # Fallback: lock just the start slot if not in model T
+                    key = (room, start_ts)
+                    accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
+                    new_slots += 1
 
     n_milp = len([r for r in rows if r["Source"] == "milp"])
     run_log.append({

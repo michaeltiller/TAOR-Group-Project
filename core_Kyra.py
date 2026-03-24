@@ -114,9 +114,13 @@ class Timetabler:
         if self._builder is not None:
             print(f"  MILP variables:      {len(self._builder.x):,}")
 
-        print("\n  Compulsory year groups (K_Y):")
-        for yr in sorted(s.K_Y.keys()):
-            print(f"    Year {yr}: {len(s.K_Y[yr]):,} event(s)")
+        print("\n  Compulsory year groups (K_YD):")
+        year_totals: dict = {}
+        for (yr, _pg), evs in s.K_YD.items():
+            year_totals[yr] = year_totals.get(yr, 0) + len(evs)
+        for yr in sorted(year_totals.keys()):
+            print(f"    Year {yr}: {year_totals[yr]:,} event(s) across "
+                  f"{sum(1 for (y,_) in s.K_YD if y==yr):,} programme(s)")
 
         print(f"\n  Solve status:        {self._solve_status or 'not solved'}")
 
@@ -151,8 +155,8 @@ class Timetabler:
         return self._sets.T if self._sets else []
 
     @property
-    def K_Y(self) -> dict:
-        return self._sets.K_Y if self._sets else {}
+    def K_YD(self) -> dict:
+        return self._sets.K_YD if self._sets else {}
 
     @property
     def events(self) -> pd.DataFrame | None:

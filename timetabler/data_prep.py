@@ -20,19 +20,19 @@ class TimetablerSets:
     E: list                     # free event IDs entering the MILP
     R: list                     # vet room IDs
     T: list                     # sorted timeslot strings
-    K_Y: dict                   # {year_str: set(event_ids)}
+    K_YD: dict                  # {(year_str, prog_code): set(event_ids)}
     room_cap: dict              # {room_id: capacity}
     room_type: dict             # {room_id: room_type}
     fixed_vet: dict             # {event_id: [(room, ts), ...]}
     fixed_non_vet: dict         # {event_id: [(room, ts), ...]}
     locked_occupancy: dict      # {(r, t): count}
-    locked_core_classes: dict   # {(year, t): set(module_codes)}
+    locked_core_classes: dict   # {(year, prog_code, t): set(module_codes)}
     event_module: dict          # {event_id: module_code}
     event_size: dict            # {event_id: size}
     event_duration: dict        # {event_id: duration_minutes}
     event_room_type: dict       # Type of room required
     event_room_lock: dict
-    core_modules_Y: dict        # {year: list of core module codes}
+    core_modules_YD: dict       # {(year, prog_code): list of core module codes}
     events: pd.DataFrame        # week-filtered events
     events_raw: pd.DataFrame    # for metadata joins in SolutionExtractor
     rooms_raw: pd.DataFrame
@@ -113,41 +113,56 @@ def build_sets_from_frames(
         .set_index("Event ID")["Room Lock"]
     ).to_dict()
 
-    # --- T: sorted timeslots from the FULL raw dataset ---
-    # all_ts = events_raw["Timeslot"].dropna().unique().tolist()
-    
-    
-    
-    # T = sorted(all_ts, key=timeslot_sort_key)
-    
-    
-    # --- T: Use a fixed timetalbe not dependent on data 
-    
+    # --- T: Fixed 1-hour timeslot grid (on-the-hour, matching real data) ---
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
-    start_time = "08:30" 
+    start_time = "08:00"
     end_time = "18:00"
-    
+
     T = []
-    
+
     for day in days:
         current = datetime.strptime(start_time, "%H:%M")
         end = datetime.strptime(end_time, "%H:%M")
-        
+
         while current <= end:
             T.append(f"{day} {current.strftime('%H:%M')}")
             current += timedelta(hours=1)
+
+    T_set = set(T)
+
+    # Build snap map: raw timeslot string → nearest model timeslot (round down)
+    # E.g., "Monday 09:30" → "Monday 09:00"
+    def snap_to_model_slot(ts_str):
+        """Snap a raw timeslot to the containing model 1-hour slot."""
+        if ts_str in T_set:
+            return ts_str
+        parts = str(ts_str).split()
+        if len(parts) < 2:
+            return None
+        day, time_str = parts[0], parts[1]
+        try:
+            t = datetime.strptime(time_str, "%H:%M")
+            # Round down to nearest hour
+            snapped = t.replace(minute=0)
+            candidate = f"{day} {snapped.strftime('%H:%M')}"
+            if candidate in T_set:
+                return candidate
+        except ValueError:
+            pass
+        return None
     
 
-    # --- K_Y: compulsory events grouped by year ---
+    # --- K_YD: compulsory events grouped by (year, programme) ---
     comp = pc_raw[pc_raw["Compulsory"]].copy()
     comp["Year"] = comp["CourseId"].str.extract(r"_YR(\d+)_", expand=False)
-    comp = comp.dropna(subset=["Year"])
-    mod_year = comp[["ModuleId", "Year"]].drop_duplicates()
+    comp["ProgCode"] = comp["CourseId"].str.extract(r"^(.+?)_YR", expand=False)
+    comp = comp.dropna(subset=["Year", "ProgCode"])
+    mod_year_prog = comp[["ModuleId", "Year", "ProgCode"]].drop_duplicates()
     merged = events.merge(
-        mod_year, left_on="Module Code", right_on="ModuleId", how="inner"
+        mod_year_prog, left_on="Module Code", right_on="ModuleId", how="inner"
     )
-    K_Y = merged.groupby("Year")["Event ID"].apply(set).to_dict()
+    K_YD = merged.groupby(["Year", "ProgCode"])["Event ID"].apply(set).to_dict()
 
     # --- event_module: event_id → module_code ---
     event_module = (
@@ -157,11 +172,11 @@ def build_sets_from_frames(
         .to_dict()
     )
 
-    # --- core_modules_Y: year → sorted list of core module codes ---
-    core_modules_Y: dict = {}
-    for year, event_set in K_Y.items():
+    # --- core_modules_YD: (year, prog) → sorted list of core module codes ---
+    core_modules_YD: dict = {}
+    for (year, prog), event_set in K_YD.items():
         mods = {event_module[e] for e in event_set if e in event_module}
-        core_modules_Y[year] = sorted(mods)
+        core_modules_YD[(year, prog)] = sorted(mods)
 
     # --- Event classification ---
     E: list = []
@@ -192,20 +207,26 @@ def build_sets_from_frames(
             if pd.isna(room) or pd.isna(ts):
                 continue
 
+            # Snap raw timeslot to model grid for locking
+            ts_str = str(ts)
+            model_ts = snap_to_model_slot(ts_str)
+
             if room in vet_room_set:
-                vet_pairs.append((room, ts))
-                locked_occupancy[(room, ts)] = (
-                    locked_occupancy.get((room, ts), 0) + 1
-                )
-                for year, event_set in K_Y.items():
-                    if event_id in event_set:
-                        mod = event_module.get(event_id)
-                        if mod:
-                            locked_core_classes.setdefault(
-                                (year, ts), set()
-                            ).add(mod)
+                vet_pairs.append((room, ts_str))
+                # Lock using the model-aligned timeslot
+                if model_ts:
+                    locked_occupancy[(room, model_ts)] = (
+                        locked_occupancy.get((room, model_ts), 0) + 1
+                    )
+                    for (year, prog), event_set in K_YD.items():
+                        if event_id in event_set:
+                            mod = event_module.get(event_id)
+                            if mod:
+                                locked_core_classes.setdefault(
+                                    (year, prog, model_ts), set()
+                                ).add(mod)
             else:
-                non_vet_pairs.append((room, ts))
+                non_vet_pairs.append((room, ts_str))
 
         if vet_pairs:
             fixed_vet[event_id] = vet_pairs
@@ -221,13 +242,16 @@ def build_sets_from_frames(
         f"fixed_vet={len(fixed_vet):,}, "
         f"fixed_non_vet={len(fixed_non_vet):,}"
     )
-    print(f"K_Y: { {y: len(s) for y, s in K_Y.items()} }")
+    year_totals: dict = {}
+    for (yr, _pg), s_set in K_YD.items():
+        year_totals[yr] = year_totals.get(yr, 0) + len(s_set)
+    print(f"K_YD: {len(K_YD)} (year, prog) pairs; year totals: {year_totals}")
 
     return TimetablerSets(
         E=E,
         R=R,
         T=T,
-        K_Y=K_Y,
+        K_YD=K_YD,
         room_cap=room_cap,
         room_type = room_type,
         fixed_vet=fixed_vet,
@@ -239,7 +263,7 @@ def build_sets_from_frames(
         event_duration=event_duration,
         event_room_type=event_room_type,
         event_room_lock = event_room_lock,
-        core_modules_Y=core_modules_Y,
+        core_modules_YD=core_modules_YD,
         events=events,
         events_raw=events_raw,
         rooms_raw=rooms_raw,

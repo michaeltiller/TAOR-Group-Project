@@ -120,9 +120,13 @@ class Timetabler:
             print(f"  Fixed-vet events:    {len(s.fixed_vet):,}")
             print(f"  Fixed-non-vet:       {len(s.fixed_non_vet):,}")
         print(f"  MILP variables:      {len(self.x):,}")
-        print("\n  Compulsory year groups (K_Y):")
-        for yr in sorted(self.K_Y.keys()):
-            print(f"    Year {yr}: {len(self.K_Y[yr]):,} event(s)")
+        print("\n  Compulsory year groups (K_YD):")
+        year_totals: dict = {}
+        for (yr, _pg), evs in self.K_YD.items():
+            year_totals[yr] = year_totals.get(yr, 0) + len(evs)
+        for yr in sorted(year_totals.keys()):
+            print(f"    Year {yr}: {year_totals[yr]:,} event(s) across "
+                  f"{sum(1 for (y,_) in self.K_YD if y==yr):,} programme(s)")
         print(f"\n  Solve status:        {self._solve_status or 'not solved'}")
         unassigned = self.get_unassigned_events()
         if unassigned:
@@ -152,8 +156,8 @@ class Timetabler:
         return self._sets.T if self._sets else []
 
     @property
-    def K_Y(self) -> dict:
-        return self._sets.K_Y if self._sets else {}
+    def K_YD(self) -> dict:
+        return self._sets.K_YD if self._sets else {}
 
     @property
     def events(self) -> pd.DataFrame | None:
