@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import gc
 import math
 from pathlib import Path
 
@@ -46,6 +47,7 @@ OUT_DIR = Path(args.out_dir)
 
 lambda_cap = 10000
 lambda_underut = 100
+MAX_SOLVE_SECONDS = 7200  # 2-hour wall-clock limit per school
 
 CENTRAL_CAMPUS_SCHOOLS = [
     name for name, campuses in SchoolCampusDict.items()
@@ -285,6 +287,7 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # ==========================================================================
     prob = xp.problem(f"Timetabler_{school_idx}")
     prob.controls.outputlog = 0
+    prob.controls.maxtime = -MAX_SOLVE_SECONDS
 
     # ==========================================================================
     # Decision Variables (pre-filtered by room feasibility)
@@ -379,21 +382,22 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # ==========================================================================
     n_constraints = 0
 
+    # Pre-build slot_usage: (r, t) -> list of x vars that occupy that slot.
+    # O(|x| × max_slots) — far cheaper than iterating all R×T×E×slots.
+    slot_usage: dict = {}
+    for (e, r, t_start), var in x.items():
+        ti_start = t_idx[t_start]
+        for k in range(n_slots[e]):
+            key = (r, T[ti_start + k])
+            slot_usage.setdefault(key, []).append(var)
+
     # C1 — Room conflict: at most one event may occupy each (room, timeslot).
-    # A multi-slot event starting at t' blocks slots t', t'+1, ..., t'+n-1.
-    for r in R:
-        for ti, t in enumerate(T):
-            if s.locked_occupancy.get((r, t), 0) > 0:
-                continue
-            vars_rt = [
-                x[(e, r, T[ti - k])]
-                for e in E
-                for k in range(n_slots[e])
-                if ti - k >= 0 and (e, r, T[ti - k]) in x
-            ]
-            if len(vars_rt) > 1:
-                prob.addConstraint(xp.Sum(vars_rt) <= 1)
-                n_constraints += 1
+    for (r, t), vars_rt in slot_usage.items():
+        if s.locked_occupancy.get((r, t), 0) > 0:
+            continue
+        if len(vars_rt) > 1:
+            prob.addConstraint(xp.Sum(vars_rt) <= 1)
+            n_constraints += 1
 
     c1_count = n_constraints
 
@@ -465,7 +469,6 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
     # ==========================================================================
     # Solve
     # ==========================================================================
-    prob.solve()
     solvestatus, solstatus = prob.optimize()
     status_map = {
         xp.SolStatus.OPTIMAL: "optimal",
@@ -561,6 +564,10 @@ for school_idx, school in enumerate(CENTRAL_CAMPUS_SCHOOLS, 1):
         "new_slots_locked": new_slots,
         "total_slots_locked": len(accumulated_locked),
     })
+
+    # Free Xpress problem and large intermediate dicts before next school
+    del prob, x, y, Z, slot_usage, s, solution_df, rows
+    gc.collect()
 
 # =============================================================================
 # Save Run Log
