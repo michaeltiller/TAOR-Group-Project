@@ -51,8 +51,9 @@ MAX_SOLVE_SECONDS = 7200  # 2-hour wall-clock limit per school
 
 CENTRAL_CAMPUS_SCHOOLS = [
     name for name, campuses in SchoolCampusDict.items()
-    if "Central" in campuses
+    if "King's Buildings" in campuses
 ]
+
 
 # =============================================================================
 # Load Data (once for all schools)
