@@ -49,11 +49,15 @@ lambda_cap = 10000
 lambda_underut = 100
 MAX_SOLVE_SECONDS = 7200  # 2-hour wall-clock limit per school
 
+# Issues with Bioquarter since it has no DPT data 
+# College of art has 17 unassigned events -- Lauriston campus
+# Campuses: 'Bioquarter', 'Central', 'Easter Bush', 'Holyrood', "King's Buildings", 'Lauriston', 'New College', 'Western General'
+current_campus = "Western General"
+
 CENTRAL_CAMPUS_SCHOOLS = [
     name for name, campuses in SchoolCampusDict.items()
-    if "King's Buildings" in campuses
+    if current_campus in campuses
 ]
-
 
 # =============================================================================
 # Load Data (once for all schools)
@@ -115,8 +119,8 @@ def load_previous_results(out_dir, schools, start_week, n_weeks):
                 from datetime import datetime as _dt, timedelta as _td
                 _T = []
                 for _day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
-                    _cur = _dt.strptime("08:00", "%H:%M")
-                    _end = _dt.strptime("18:00", "%H:%M")
+                    _cur = _dt.strptime("09:00", "%H:%M")
+                    _end = _dt.strptime("17:00", "%H:%M")
                     while _cur <= _end:
                         _T.append(f"{_day} {_cur.strftime('%H:%M')}")
                         _cur += _td(hours=1)

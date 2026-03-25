@@ -41,7 +41,7 @@ def preprocess_timetable(df):
 
 
 def plot_room_utilization(df, output_dir):
-    """Plot 1: Total scheduled hours per room (08:00–17:00 window)."""
+    """Plot 1: Total scheduled hours per room (09:00–17:00 window)."""
     # Filter to daytime hours only (08:00–17:00 start)
     daytime_hours = [h for h in HOUR_ORDER if h <= "17:00"]
     day_df = df[df["Hour"].isin(daytime_hours)].copy()
@@ -90,7 +90,7 @@ def plot_room_utilization(df, output_dir):
     ax.set_xlabel("Total Scheduled Hours", fontsize=12)
     ax.set_ylabel("Room", fontsize=12)
     ax.set_title(
-        "Room Utilization — Total Scheduled Hours (08:00–17:00)",
+        "Room Utilization — Total Scheduled Hours (09:00–17:00)",
         fontsize=13,
         fontweight="bold",
     )
@@ -182,8 +182,8 @@ def plot_fill_ratio(df, output_dir):
 
 
 def plot_event_distribution(df, output_dir):
-    """Plot 3: Heatmap of simultaneous events by day and hour (08:00–18:00)."""
-    daytime_hours = [h for h in HOUR_ORDER if h <= "18:00"]
+    """Plot 3: Heatmap of simultaneous events by day and hour (09:00–17:00)."""
+    daytime_hours = [h for h in HOUR_ORDER if h <= "17:00"]
     valid = df.dropna(subset=["Day", "Hour"])
     valid = valid[valid["Hour"].isin(daytime_hours)]
 
@@ -215,7 +215,7 @@ def plot_event_distribution(df, output_dir):
     ax.set_xlabel("Hour", fontsize=12)
     ax.set_ylabel("Day", fontsize=12)
     ax.set_title(
-        "Event Distribution by Day & Hour (08:00–18:00)", fontsize=13, fontweight="bold"
+        "Event Distribution by Day & Hour (09:00–17:00)", fontsize=13, fontweight="bold"
     )
 
     plt.tight_layout()

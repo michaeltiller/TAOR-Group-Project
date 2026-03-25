@@ -116,8 +116,8 @@ def build_sets_from_frames(
     # --- T: Fixed 1-hour timeslot grid (on-the-hour, matching real data) ---
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
-    start_time = "08:00"
-    end_time = "18:00"
+    start_time = "09:00"
+    end_time = "17:00"
 
     T = []
 
