@@ -5,3 +5,4 @@ plots/
 *.png
 timetabler/__pycache__/
 proposedTimetable/
+*.xlsx

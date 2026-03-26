@@ -88,15 +88,12 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # =============================================================================
 
 def load_previous_results(out_dir, schools, start_week, n_weeks):
-    """Scan out_dir for completed school directories.
+    """Scan out_dir for completed school directories in the current run.
 
-    Returns (completed_indices, accumulated_locked, prior_log_rows) where:
-    - completed_indices: set of 1-based school indices already done
-    - accumulated_locked: {(room, timeslot): count} reconstructed from saved solutions
+    Returns (completed_indices, prior_log_rows) where:
+    - completed_indices: set of 1-based school indices already done in this run
     - prior_log_rows: list of run_log dicts from the previous run_log.xlsx
     """
-    tag = f"weeks_{start_week}_{start_week + n_weeks - 1}"
-    accumulated_locked = {}
     completed = set()
 
     for school_idx, school in enumerate(schools, 1):
@@ -107,41 +104,7 @@ def load_previous_results(out_dir, schools, start_week, n_weeks):
         if not status_file.exists():
             break  # Stop at first gap — don't skip ahead
 
-        status = status_file.read_text().strip()
         completed.add(school_idx)
-
-        if status in ("optimal", "feasible"):
-            sol_file = school_dir / f"solution_{tag}.xlsx"
-            if sol_file.exists():
-                df = pd.read_excel(sol_file)
-                assigned = df[df["Source"].isin(["milp", "fixed_vet"])]
-                # Build model T set for slot expansion
-                from datetime import datetime as _dt, timedelta as _td
-                _T = []
-                for _day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
-                    _cur = _dt.strptime("09:00", "%H:%M")
-                    _end = _dt.strptime("17:00", "%H:%M")
-                    while _cur <= _end:
-                        _T.append(f"{_day} {_cur.strftime('%H:%M')}")
-                        _cur += _td(hours=1)
-                _t_idx = {t: i for i, t in enumerate(_T)}
-                for _, row in assigned.iterrows():
-                    if pd.notna(row["Room"]) and pd.notna(row["Timeslot"]):
-                        room = str(row["Room"])
-                        start_ts = str(row["Timeslot"])
-                        dur = row.get("Duration (minutes)", 60)
-                        if pd.isna(dur):
-                            dur = 60
-                        n_occ = max(1, math.ceil(dur / 60))
-                        if start_ts in _t_idx:
-                            ti = _t_idx[start_ts]
-                            for k in range(n_occ):
-                                if ti + k < len(_T):
-                                    key = (room, _T[ti + k])
-                                    accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
-                        else:
-                            key = (room, start_ts)
-                            accumulated_locked[key] = accumulated_locked.get(key, 0) + 1
 
     # Restore prior run_log rows if available
     prior_log_rows = []
@@ -151,7 +114,70 @@ def load_previous_results(out_dir, schools, start_week, n_weeks):
         prior_df = prior_df[prior_df["index"].isin(completed)]
         prior_log_rows = prior_df.to_dict("records")
 
-    return completed, accumulated_locked, prior_log_rows
+    return completed, prior_log_rows
+
+
+def load_global_locks(out_dir: Path, tag: str) -> dict:
+    """Load all (room, timeslot) locks from every existing solution in out_dir.
+
+    Scans ALL subdirectories regardless of which campus run produced them, so
+    a new campus run will respect rooms already booked by prior runs.
+    Returns {(room, timeslot): count}.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    _T = []
+    for _day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        _cur = _dt.strptime("09:00", "%H:%M")
+        _end = _dt.strptime("17:00", "%H:%M")
+        while _cur <= _end:
+            _T.append(f"{_day} {_cur.strftime('%H:%M')}")
+            _cur += _td(hours=1)
+    _t_idx = {t: i for i, t in enumerate(_T)}
+
+    accumulated = {}
+    n_files = 0
+    for school_dir in sorted(out_dir.iterdir()):
+        if not school_dir.is_dir():
+            continue
+        sol_file = school_dir / f"solution_{tag}.xlsx"
+        if not sol_file.exists():
+            continue
+        n_files += 1
+        df = pd.read_excel(sol_file)
+        assigned = df[df["Source"].isin(["milp", "fixed_vet"])]
+        for _, row in assigned.iterrows():
+            if pd.isna(row["Room"]) or pd.isna(row["Timeslot"]):
+                continue
+            room = str(row["Room"])
+            start_ts = str(row["Timeslot"])
+            dur = row.get("Duration (minutes)", 60)
+            if pd.isna(dur):
+                dur = 60
+            n_occ = max(1, math.ceil(dur / 60))
+            if start_ts in _t_idx:
+                ti = _t_idx[start_ts]
+                for k in range(n_occ):
+                    if ti + k < len(_T):
+                        key = (room, _T[ti + k])
+                        accumulated[key] = accumulated.get(key, 0) + 1
+            else:
+                # Snap raw timeslot (e.g. "Monday 09:30") to nearest model hour
+                parts = start_ts.split()
+                if len(parts) == 2:
+                    try:
+                        snapped_t = _dt.strptime(parts[1], "%H:%M").replace(minute=0)
+                        snapped = f"{parts[0]} {snapped_t.strftime('%H:%M')}"
+                        if snapped in _t_idx:
+                            ti = _t_idx[snapped]
+                            for k in range(n_occ):
+                                if ti + k < len(_T):
+                                    key = (room, _T[ti + k])
+                                    accumulated[key] = accumulated.get(key, 0) + 1
+                    except ValueError:
+                        pass
+    if n_files:
+        print(f"  Pre-loaded {len(accumulated):,} locked slots from {n_files} existing solution file(s).")
+    return accumulated
 
 
 def filter_pc_for_school(pc_df, dpt_df, school):
@@ -239,23 +265,31 @@ def underutilising(e, r, s):
 
 
 # =============================================================================
-# Resume Detection
+# Resume Detection + Global Lock Pre-loading
 # =============================================================================
 
-accumulated_locked = {}
 run_log = []
 completed_indices = set()
+tag = f"weeks_{start_week}_{start_week + n_weeks - 1}"
 
+# Pre-load locks from ALL existing solutions (any campus run) so this run
+# never double-books a room that was already assigned elsewhere.
 if not args.force and OUT_DIR.exists():
-    print(f"\nChecking for existing output in {OUT_DIR}/...")
-    completed_indices, accumulated_locked, prior_log_rows = load_previous_results(
+    print(f"\nPre-loading existing room locks from {OUT_DIR}/...")
+    accumulated_locked = load_global_locks(OUT_DIR, tag)
+else:
+    accumulated_locked = {}
+
+# Detect which schools in THIS run are already done (for resume).
+if not args.force and OUT_DIR.exists():
+    print(f"Checking for completed schools in current run...")
+    completed_indices, prior_log_rows = load_previous_results(
         OUT_DIR, CENTRAL_CAMPUS_SCHOOLS, start_week, n_weeks
     )
     if completed_indices:
         run_log = prior_log_rows
         next_school = max(completed_indices) + 1
         print(f"  Found {len(completed_indices)} completed school(s). Resuming from school {next_school}.")
-        print(f"  Reconstructed {len(accumulated_locked)} locked (room, timeslot) slots.")
     else:
         print("  No completed schools found — starting from the beginning.")
 elif args.force:
