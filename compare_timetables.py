@@ -69,6 +69,10 @@ def enrich_if_needed(df: pd.DataFrame, fallback_weeks=None) -> pd.DataFrame:
         if col in events.columns:
             event_cols.append(col)
 
+    # Drop columns that will be re-joined to avoid _x/_y collision
+    cols_to_rejoin = [c for c in event_cols if c != "Event ID"]
+    df = df.drop(columns=[c for c in cols_to_rejoin if c in df.columns])
+
     event_lookup = events[event_cols].drop_duplicates(subset=["Event ID"])
     df = df.merge(event_lookup, on="Event ID", how="left")
 
