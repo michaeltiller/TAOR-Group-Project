@@ -1,10 +1,3 @@
-# Deliverable for Mid Project Report
-
-- All data loading and preprocessing functions and pipelines have been completed
-- Model for Vet School is implemented in main.py; however is infeasible.
-- Currently working on simplifying the code and formulation to solve the infeasibility issue. 
-
-
 # Vet School Timetabling Pipeline
 
 Data analysis pipeline for the Royal (Dick) School of Veterinary Studies (University of Edinburgh).
@@ -203,6 +196,86 @@ python main.py --start-week 15  # weeks 15-16
 
 ---
 
+### `improve_timetable.py`
+
+Simulated Annealing (SA) post-processor. Loads a MILP solution from Excel and reshuffles
+MILP-assigned events to cluster them earlier in the week and within core hours (Mon–Wed,
+10:00–15:00). Fixed events are never moved.
+
+**Run:**
+```bash
+python improve_timetable.py --start-week 9
+python improve_timetable.py --input proposedTimetable/solution_weeks_9_10.xlsx --start-week 9
+```
+
+**Arguments:**
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--start-week` | int | `9` | First week of the 2-week window |
+| `--input` | str | `proposedTimetable/solution_weeks_<s>_<e>.xlsx` | Path to the MILP solution Excel file to improve |
+| `--t0` | float | `20.0` | Initial SA temperature |
+| `--t-final` | float | `0.01` | Final SA temperature |
+| `--cooling` | float | `0.9999` | Cooling rate per iteration |
+| `--max-iter` | int | `200000` | Maximum SA iterations |
+| `--seed` | int | `42` | Random seed for reproducibility |
+
+**Output** (written to `proposedTimetable/`):
+
+| File | Description |
+|------|-------------|
+| `improved_weeks_<s>_<e>.xlsx` | Flat event list: SA-optimised assignments with enriched metadata |
+| `improved_weeks_<s>_<e>_grid.xlsx` | Pivot grid: one sheet per day, rows = rooms, columns = hours |
+
+The output schema matches `solution_weeks_*.xlsx` and is accepted by `compare_timetables.py` directly.
+
+**Cost function:** penalises late-week days (Thursday +4, Friday +6) and off-peak hours (before 10:00 and after 15:00). C1 (room conflict) and C2 (core-class clash) feasibility are enforced throughout; the SA will not introduce new violations beyond those inherited from the input solution.
+
+---
+
+### `compare_timetables.py`
+
+Accepts two arbitrary timetable Excel files, auto-enriches each if needed (joins
+`Duration`, `Building`, `Campus`, `Room Type`, `Core`, `Semester`, `Weeks` from the vet
+data sources), then generates the full 5-plot EDA suite for each into separate directories.
+
+Enrichment is applied automatically when a file is missing both `Building` and `Core`
+columns — this covers all MILP and SA output files. Files already produced by
+`build_timetable.py` are detected as enriched and the joins are skipped.
+
+**Run:**
+```bash
+# Compare original vs SA-improved
+python compare_timetables.py \
+  Data/vet/timetable_weeks_9_10.xlsx \
+  proposedTimetable/improved_weeks_9_10.xlsx
+
+# Compare MILP solution vs SA-improved
+python compare_timetables.py \
+  proposedTimetable/solution_weeks_9_10.xlsx \
+  proposedTimetable/improved_weeks_9_10.xlsx
+
+# Custom output directory
+python compare_timetables.py file1.xlsx file2.xlsx --output-dir myplots/
+```
+
+**Arguments:**
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `file1` | path | — | First timetable Excel file (required) |
+| `file2` | path | — | Second timetable Excel file (required) |
+| `--fallback-weeks` | int | `None` | Fallback `Weeks` label (e.g. `9` → `"9-10"`) used only when enrichment is applied and the events Excel has no `Weeks` column |
+| `--output-dir` | str | `plots/` | Base directory for output plots |
+
+**Output:** Two subdirectories under `--output-dir`, named after each file's stem:
+- `plots/<stem1>/` — 5 PNGs for the first timetable
+- `plots/<stem2>/` — 5 PNGs for the second timetable
+
+If both files share the same filename stem, suffixes `_1`/`_2` are appended automatically to prevent overwriting.
+
+---
+
 ### `data_loader.py`
 
 Central data hub. The `TimetablingData` class loads and exposes all 5 datasets. Run directly to print summary statistics and a sample of unique timeslots.
@@ -250,26 +323,43 @@ Shared constants and helper functions used across the pipeline. Not intended to 
 
 ```
 Raw Data (Data/*.xlsx)
-        |
+        │
    filter_vet.py
-        |
+        │
 Vet-Filtered Data (Data/vet/*.xlsx)
-        |                    |
-   main.py              build_timetable.py ──► eda_visualizations.py
-   (Timetabler)              |                         |
-        |              Timetable Excel           5 PNG analysis plots
-        |            (Data/vet/timetable_*) (plots/)
-        |
-proposedTimetable/
-  solution_*.xlsx
-  timetable_grid_*.xlsx
-  summary_*.xlsx
+        │                         │
+   main.py                  build_timetable.py ──► eda_visualizations.py
+   (Timetabler / MILP)            │                     (5 PNG plots)
+        │                  Data/vet/timetable_*.xlsx
+        │
+proposedTimetable/solution_*.xlsx
+        │
+   improve_timetable.py  (Simulated Annealing post-processor)
+        │
+proposedTimetable/improved_*.xlsx
+        │
+   compare_timetables.py  (accepts any two timetable files)
+        │
+plots/<stem1>/   plots/<stem2>/   (5 PNGs each, auto-enriched)
+```
+
+**Typical end-to-end run:**
+```bash
+python filter_vet.py                          # Stage 0: filter raw data
+python main.py --start-week 9                 # Stage 1: MILP solve
+python improve_timetable.py --start-week 9    # Stage 2: SA post-process
+python build_timetable.py --start-week 9      # Stage 3: build original timetable
+python compare_timetables.py \                # Stage 4: compare original vs improved
+  Data/vet/timetable_weeks_9_10.xlsx \
+  proposedTimetable/improved_weeks_9_10.xlsx
 ```
 
 ## Project Structure
 
 ```
 ├── main.py                  # MILP timetabler entry point (uses Timetabler class)
+├── improve_timetable.py     # Simulated Annealing post-processor
+├── compare_timetables.py    # EDA comparison for any two timetable Excel files
 ├── timetabler/
 │   ├── core.py              # Timetabler orchestrator class
 │   ├── data_prep.py         # TimetablerSets dataclass + build_sets()
@@ -277,10 +367,10 @@ proposedTimetable/
 │   └── solution.py          # Solution extraction and timetable export
 ├── data_loader.py           # TimetablingData class and data loading utilities
 ├── filter_vet.py            # Filters university-wide data to vet school subset
-├── build_timetable.py       # Generates 2-week timetable Excel output
+├── build_timetable.py       # Generates 2-week timetable Excel from original data
 ├── eda_visualizations.py    # EDA plots (called by build_timetable or standalone)
 ├── utils.py                 # Shared constants and helper functions
 ├── Data/                    # Raw input data (not committed)
 │   └── vet/                 # Vet-filtered outputs and timetable files
-├── proposedTimetable/       # MILP solver outputs
+├── proposedTimetable/       # MILP and SA solver outputs
 └── plots/                   # Generated PNG visualizations

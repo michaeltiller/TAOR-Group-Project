@@ -1,17 +1,21 @@
 """
-Compare Original and Proposed Timetables
-=========================================
-Loads the original vet school timetable and a proposed (MILP)
-timetable, enriches the proposed one with missing columns, then generates
-the full EDA plot suite for each and saves to separate directories.
+Compare Two Timetable Files
+============================
+Accepts two arbitrary timetable Excel files, auto-enriches each if needed
+(joins Building, Campus, Room Type, Core, Duration, Semester, Weeks from vet
+data sources), then generates the full EDA plot suite for each.
 
 Usage:
-    python compare_timetables.py                  # default: weeks 9-10
-    python compare_timetables.py --start-week 15  # weeks 15-16
+    python compare_timetables.py <path1> <path2>
+    python compare_timetables.py <path1> <path2> --fallback-weeks 9
+    python compare_timetables.py <path1> <path2> --output-dir myplots/
 
 Output:
-    plots/original/  — 5 PNGs for the original timetable
-    plots/proposed/  — 5 PNGs for the proposed timetable
+    <output-dir>/<stem1>/  — 5 PNGs for the first timetable
+    <output-dir>/<stem2>/  — 5 PNGs for the second timetable
+
+If both files share the same filename stem, suffixes _1 and _2 are appended
+to avoid overwriting.
 """
 
 import argparse
@@ -22,28 +26,36 @@ from utils import VET_DATA_DIR
 from eda_visualizations import main as run_eda
 
 
-def load_original(start_week: int) -> pd.DataFrame:
-    end_week = start_week + 1
-    path = VET_DATA_DIR / f"timetable_weeks_{start_week}_{end_week}.xlsx"
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def load_timetable(path: Path) -> pd.DataFrame:
     if not path.exists():
-        raise FileNotFoundError(
-            f"Original timetable not found: {path}\n"
-            f"Run: python build_timetable.py --start-week {start_week}"
-        )
+        raise FileNotFoundError(f"Timetable file not found: {path}")
     return pd.read_excel(path)
 
 
-def load_proposed(start_week: int) -> pd.DataFrame:
-    end_week = start_week + 1
-    path = Path("proposedTimetable") / f"solution_weeks_{start_week}_{end_week}.xlsx"
-    if not path.exists():
-        raise FileNotFoundError(f"Proposed timetable not found: {path}")
-    return pd.read_excel(path)
+def needs_enrichment(df: pd.DataFrame) -> bool:
+    """Return True if the DataFrame is missing enrichment columns.
+
+    The original timetable (from build_timetable.py) always has both
+    'Building' and 'Core'. MILP/improved outputs lack both.
+    Checking the conjunction avoids a false-positive if either join
+    happened to fail independently.
+    """
+    return "Building" not in df.columns or "Core" not in df.columns
 
 
-def enrich_proposed(proposed: pd.DataFrame, start_week: int) -> pd.DataFrame:
-    """Add the columns that the proposed timetable lacks by joining vet data sources."""
-    df = proposed.copy()
+def enrich_if_needed(df: pd.DataFrame, fallback_weeks=None) -> pd.DataFrame:
+    """Add the columns that proposed/improved timetables lack by joining vet data sources.
+
+    Skips enrichment entirely if the DataFrame already has 'Building' and 'Core'.
+    """
+    if not needs_enrichment(df):
+        return df
+
+    df = df.copy()
 
     # Drop Source column if present (not needed for EDA)
     df = df.drop(columns=["Source"], errors="ignore")
@@ -52,7 +64,6 @@ def enrich_proposed(proposed: pd.DataFrame, start_week: int) -> pd.DataFrame:
     events_path = VET_DATA_DIR / "2024-5 Event Module Room.xlsx"
     events = pd.read_excel(events_path)
 
-    # Identify available join columns
     event_cols = ["Event ID"]
     for col in ["Duration (minutes)", "Semester", "Weeks"]:
         if col in events.columns:
@@ -61,10 +72,11 @@ def enrich_proposed(proposed: pd.DataFrame, start_week: int) -> pd.DataFrame:
     event_lookup = events[event_cols].drop_duplicates(subset=["Event ID"])
     df = df.merge(event_lookup, on="Event ID", how="left")
 
-    # Hardcode Weeks if not available from the events data
+    # Fallback Weeks label if join produced nothing
     if "Weeks" not in df.columns or df["Weeks"].isna().all():
-        end_week = start_week + 1
-        df["Weeks"] = f"{start_week}-{end_week}"
+        if fallback_weeks is not None:
+            df["Weeks"] = f"{fallback_weeks}-{fallback_weeks + 1}"
+        # else: leave as NaN — EDA plots do not consume the Weeks column
 
     # --- Join Building, Campus, Room Type (detail) from vet rooms ---
     rooms_path = VET_DATA_DIR / "Rooms and Room Types.xlsx"
@@ -101,45 +113,62 @@ def enrich_proposed(proposed: pd.DataFrame, start_week: int) -> pd.DataFrame:
     return df
 
 
+def _resolve_output_dirs(stem1: str, stem2: str, base: str):
+    """Return two output Path objects, appending _1/_2 on stem collision."""
+    base_path = Path(base)
+    if stem1 != stem2:
+        return base_path / stem1, base_path / stem2
+    return base_path / (stem1 + "_1"), base_path / (stem2 + "_2")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate EDA plots for original and proposed timetables"
+        description="Generate EDA comparison plots for two timetable Excel files."
+    )
+    parser.add_argument("file1", type=Path, help="First timetable Excel file")
+    parser.add_argument("file2", type=Path, help="Second timetable Excel file")
+    parser.add_argument(
+        "--fallback-weeks",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Fallback value for the 'Weeks' column label (e.g. 9 → '9-10') used "
+            "only when enrichment is applied and the events data has no Weeks column."
+        ),
     )
     parser.add_argument(
-        "--start-week",
-        type=int,
-        default=9,
-        help="First week of the 2-week window (default: 9)",
+        "--output-dir",
+        type=str,
+        default="plots",
+        help="Base directory for output plots (default: plots/)",
     )
     args = parser.parse_args()
-    start_week = args.start_week
-    end_week = start_week + 1
 
-    print(f"Comparing timetables for weeks {start_week}–{end_week}\n")
+    out1, out2 = _resolve_output_dirs(args.file1.stem, args.file2.stem, args.output_dir)
 
-    # --- Original timetable ---
-    print(f"Loading original timetable (weeks {start_week}–{end_week})...")
-    original_df = load_original(start_week)
-    print(f"  {len(original_df)} events loaded.")
+    for path, out_dir in [(args.file1, out1), (args.file2, out2)]:
+        print(f"\nLoading {path} ...")
+        df = load_timetable(path)
+        print(f"  {len(df)} rows, columns: {list(df.columns)}")
 
-    print(f"\nGenerating plots for ORIGINAL timetable -> plots/original/")
-    run_eda(original_df, output_dir="plots/original")
+        if needs_enrichment(df):
+            print("  Enriching with vet data joins...")
+            df = enrich_if_needed(df, fallback_weeks=args.fallback_weeks)
+            print(f"  Enriched columns: {list(df.columns)}")
+        else:
+            print("  Already enriched — skipping joins.")
 
-    # --- Proposed timetable ---
-    print(f"\nLoading proposed timetable (weeks {start_week}–{end_week})...")
-    proposed_raw = load_proposed(start_week)
-    print(f"  {len(proposed_raw)} events loaded. Columns: {list(proposed_raw.columns)}")
-
-    print("  Enriching proposed timetable with vet data joins...")
-    proposed_df = enrich_proposed(proposed_raw, start_week)
-    print(f"  Enriched columns: {list(proposed_df.columns)}")
-
-    print(f"\nGenerating plots for PROPOSED timetable -> plots/proposed/")
-    run_eda(proposed_df, output_dir="plots/proposed")
+        print(f"\nGenerating plots -> {out_dir}/")
+        run_eda(df, output_dir=str(out_dir))
 
     print("\nDone.")
-    print("  plots/original/ - EDA plots for original timetable")
-    print("  plots/proposed/ -EDA plots for proposed timetable")
+    print(f"  {out1}/ — plots for {args.file1.name}")
+    print(f"  {out2}/ — plots for {args.file2.name}")
 
 
 if __name__ == "__main__":
