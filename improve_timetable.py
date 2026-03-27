@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from timetabler.data_prep import TimetablerSets, build_sets
-from utils import VET_DATA_DIR, parse_timeslot
+from utils import DATA_DIR, parse_timeslot
 
 OUT_DIR = Path("proposedTimetable")
 
@@ -441,6 +441,7 @@ class TimetableImprover:
                 "Timeslot": t,
                 "Source": "milp",
                 "Event Size": sets.event_size.get(e),
+                "Duration (minutes)": sets.event_duration.get(e),
                 "Room Capacity": sets.room_cap.get(r),
             })
 
@@ -452,6 +453,7 @@ class TimetableImprover:
                     "Timeslot": t,
                     "Source": "fixed_vet",
                     "Event Size": sets.event_size.get(e),
+                    "Duration (minutes)": sets.event_duration.get(e),
                     "Room Capacity": sets.room_cap.get(r),
                 })
 
@@ -463,12 +465,13 @@ class TimetableImprover:
                     "Timeslot": t,
                     "Source": "fixed_non_vet",
                     "Event Size": sets.event_size.get(e),
+                    "Duration (minutes)": sets.event_duration.get(e),
                     "Room Capacity": sets.room_cap.get(r),
                 })
 
         return pd.DataFrame(
             rows,
-            columns=["Event ID", "Room", "Timeslot", "Source", "Event Size", "Room Capacity"],
+            columns=["Event ID", "Room", "Timeslot", "Source", "Event Size", "Room Capacity", "Duration (minutes)"],
         )
 
 
@@ -513,7 +516,7 @@ def main():
 
     # --- Phase 1: build constraint sets from raw data ---
     print(f"\n=== Phase 1: Loading constraint data (weeks {start}-{end}) ===")
-    sets = build_sets(VET_DATA_DIR, {start, end})
+    sets = build_sets(DATA_DIR, {start, end})
 
     # --- Phase 2: load existing solution ---
     print(f"\n=== Phase 2: Loading initial solution from {input_path} ===")
