@@ -22,7 +22,7 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
-from utils import VET_DATA_DIR
+from utils import DATA_DIR
 from eda_visualizations import main as run_eda
 
 
@@ -61,7 +61,7 @@ def enrich_if_needed(df: pd.DataFrame, fallback_weeks=None) -> pd.DataFrame:
     df = df.drop(columns=["Source"], errors="ignore")
 
     # --- Join Duration (minutes), Semester, Weeks from vet events ---
-    events_path = VET_DATA_DIR / "2024-5 Event Module Room.xlsx"
+    events_path = DATA_DIR / "2024-5 Event Module Room.xlsx"
     events = pd.read_excel(events_path)
 
     event_cols = ["Event ID"]
@@ -83,7 +83,7 @@ def enrich_if_needed(df: pd.DataFrame, fallback_weeks=None) -> pd.DataFrame:
         # else: leave as NaN — EDA plots do not consume the Weeks column
 
     # --- Join Building, Campus, Room Type (detail) from vet rooms ---
-    rooms_path = VET_DATA_DIR / "Rooms and Room Types.xlsx"
+    rooms_path = DATA_DIR / "Rooms and Room Types.xlsx"
     rooms = pd.read_excel(rooms_path)
 
     room_cols = ["Id"]
@@ -103,7 +103,7 @@ def enrich_if_needed(df: pd.DataFrame, fallback_weeks=None) -> pd.DataFrame:
     df = df.merge(room_lookup, on="Room", how="left")
 
     # --- Compute Core flag from Programme-Course data ---
-    prog_course_path = VET_DATA_DIR / "Programme-Course.xlsx"
+    prog_course_path = DATA_DIR / "Programme-Course.xlsx"
     prog_course = pd.read_excel(prog_course_path)
 
     if "ModuleId" in prog_course.columns and "Compulsory" in prog_course.columns:
