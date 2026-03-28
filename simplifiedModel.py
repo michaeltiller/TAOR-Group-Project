@@ -51,8 +51,6 @@ lambda_underut= 100
 
 s = build_sets(data_dir, target_weeks)
 
-
-
 p = pd.read_excel('penaltyTable.xlsx').iloc[:, 1]
 p = np.array(p)
 p = np.append(p, 1000)

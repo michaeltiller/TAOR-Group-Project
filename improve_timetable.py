@@ -6,7 +6,7 @@ maximise density (cluster events Mon–Wed, 10:00–15:00). Fixed events are nev
 
 Usage:
     python improve_timetable.py --start-week 9
-    python improve_timetable.py --input proposedTimetable/solution_weeks_9_10.xlsx --start-week 9
+    python improve_timetable.py --input combined_output.xlsx --start-week 9
     python improve_timetable.py --start-week 9 --t0 20 --cooling 0.9999 --max-iter 200000
 """
 
@@ -44,7 +44,7 @@ DAY_PENALTY: dict[str, float] = {
     "Tuesday":   1,
     "Wednesday": 2,
     "Thursday":  4,
-    "Friday":    6,
+    "Friday":    10,
 }
 
 
@@ -68,7 +68,7 @@ class TimetableImprover:
             initial_df:  Full solution DataFrame from Excel (all sources).
         """
         self._sets = sets
-
+    
         # --- Phase 2: extract MILP assignments ---
         milp_df = initial_df[initial_df["Source"] == "milp"].copy()
         self.milp_events: list = milp_df["Event ID"].tolist()
@@ -76,7 +76,7 @@ class TimetableImprover:
             row["Event ID"]: (row["Room"], row["Timeslot"])
             for _, row in milp_df.iterrows()
         }
-
+    
         # --- Build vet_room_slot_used: MILP + fixed_vet occupancy ---
         self.vet_room_slot_used: set = set()
         for e, (r, t) in self.event_assignment.items():
@@ -84,18 +84,18 @@ class TimetableImprover:
         for e, assignments in sets.fixed_vet.items():
             for r, t in assignments:
                 self.vet_room_slot_used.add((r, t))
-
+    
         # --- Build year_ts_modules from locked_core_classes + MILP assignments ---
         # {(year, prog, ts): set(module_code)}
         self.year_ts_modules: dict = {}
         for (year, prog, ts), mods in sets.locked_core_classes.items():
             self.year_ts_modules[(year, prog, ts)] = set(mods)
-
+    
         # Ref-counter for MILP-contributed module occupancy (not locked).
         # {(year, prog, ts, mod): count}  — needed so parallel sections (same
         # module, multiple events) don't cause premature set.discard() on move.
         self._mod_count: dict = {}
-
+    
         for e, (r, t) in self.event_assignment.items():
             mod = sets.event_module.get(e)
             if mod is None:
@@ -106,21 +106,40 @@ class TimetableImprover:
                     self.year_ts_modules.setdefault(key, set()).add(mod)
                     ckey = (year, prog, t, mod)
                     self._mod_count[ckey] = self._mod_count.get(ckey, 0) + 1
-
+    
         # Snapshot C2 violations present in the initial solution so validation
         # can distinguish pre-existing from SA-introduced violations.
         self._initial_c2_violations: set = self._current_c2_violations()
-
-        # --- Pre-compute candidates per event (filtered by capacity) ---
+    
+        # --- Build campus lookup and fix each event's campus at initialisation ---
+        self._campus: dict = sets.campus  # {room_id: campus_name}
+        self._event_campus: dict = {
+            e: self._campus.get(r)
+            for e, (r, _) in self.event_assignment.items()
+        }
+    
+        # --- Pre-compute candidates per event (filtered by capacity AND campus) ---
         self.event_candidates: dict = {}
         for e in self.milp_events:
             size = sets.event_size.get(e, 0) or 0
+            event_campus = self._event_campus.get(e)
             candidates = []
             for r in sets.R:
+                if event_campus is not None and self._campus.get(r) != event_campus:
+                    continue
                 if (sets.room_cap.get(r) or 0) >= size:
                     for t in sets.T:
                         candidates.append((r, t))
             self.event_candidates[e] = candidates
+        
+        self._input_meta = (
+            initial_df
+            .drop_duplicates(subset="Event ID")
+            .set_index("Event ID")
+            .to_dict(orient="index")
+        )
+
+        
 
     # ------------------------------------------------------------------
     # Helpers
@@ -172,8 +191,14 @@ class TimetableImprover:
         return True
 
     def is_feasible_move(self, event, room, ts: str) -> bool:
-        """Check C1, C2, and capacity for placing event at (room, ts)."""
+        """Check C1, C2, capacity, and campus for placing event at (room, ts)."""
         sets = self._sets
+    
+        # Campus constraint: new room must be on the event's original campus
+        event_campus = self._event_campus.get(event)
+        if event_campus is not None and self._campus.get(room) != event_campus:
+            return False
+    
         if (room, ts) in self.vet_room_slot_used:
             return False
         size = sets.event_size.get(event, 0) or 0
@@ -430,51 +455,72 @@ class TimetableImprover:
     # ------------------------------------------------------------------
 
     def get_solution(self) -> pd.DataFrame:
-        """Return DataFrame in the same schema as SolutionExtractor output."""
+        """Return DataFrame in the same schema as the input solution."""
         sets = self._sets
+    
+        def meta(e, col):
+            return self._input_meta.get(e, {}).get(col)
+    
         rows = []
-
+    
         for e, (r, t) in self.event_assignment.items():
             rows.append({
-                "Event ID": e,
-                "Room": r,
-                "Timeslot": t,
-                "Source": "milp",
-                "Event Size": sets.event_size.get(e),
-                "Duration (minutes)": sets.event_duration.get(e),
-                "Room Capacity": sets.room_cap.get(r),
+                "Event ID":           e,
+                "Room":               r,
+                "Timeslot":           t,
+                "Source":             "milp",
+                "Event Size":         meta(e, "Event Size"),
+                "Room Capacity":      sets.room_cap.get(r),
+                "Event Name":         meta(e, "Event Name"),
+                "Event Type":         meta(e, "Event Type"),
+                "Module Code":        meta(e, "Module Code"),
+                "Module Name":        meta(e, "Module Name"),
+                "Duration (minutes)": meta(e, "Duration (minutes)"),
+                "Weeks":              meta(e, "Weeks"),
+                "Semester":           meta(e, "Semester"),
             })
-
+    
         for e, assignments in sets.fixed_vet.items():
             for r, t in assignments:
                 rows.append({
-                    "Event ID": e,
-                    "Room": r,
-                    "Timeslot": t,
-                    "Source": "fixed_vet",
-                    "Event Size": sets.event_size.get(e),
-                    "Duration (minutes)": sets.event_duration.get(e),
-                    "Room Capacity": sets.room_cap.get(r),
+                    "Event ID":           e,
+                    "Room":               r,
+                    "Timeslot":           t,
+                    "Source":             "fixed_vet",
+                    "Event Size":         meta(e, "Event Size"),
+                    "Room Capacity":      sets.room_cap.get(r),
+                    "Event Name":         meta(e, "Event Name"),
+                    "Event Type":         meta(e, "Event Type"),
+                    "Module Code":        meta(e, "Module Code"),
+                    "Module Name":        meta(e, "Module Name"),
+                    "Duration (minutes)": meta(e, "Duration (minutes)"),
+                    "Weeks":              meta(e, "Weeks"),
+                    "Semester":           meta(e, "Semester"),
                 })
-
+    
         for e, assignments in sets.fixed_non_vet.items():
             for r, t in assignments:
                 rows.append({
-                    "Event ID": e,
-                    "Room": r,
-                    "Timeslot": t,
-                    "Source": "fixed_non_vet",
-                    "Event Size": sets.event_size.get(e),
-                    "Duration (minutes)": sets.event_duration.get(e),
-                    "Room Capacity": sets.room_cap.get(r),
+                    "Event ID":           e,
+                    "Room":               r,
+                    "Timeslot":           t,
+                    "Source":             "fixed_non_vet",
+                    "Event Size":         meta(e, "Event Size"),
+                    "Room Capacity":      sets.room_cap.get(r),
+                    "Event Name":         meta(e, "Event Name"),
+                    "Event Type":         meta(e, "Event Type"),
+                    "Module Code":        meta(e, "Module Code"),
+                    "Module Name":        meta(e, "Module Name"),
+                    "Duration (minutes)": meta(e, "Duration (minutes)"),
+                    "Weeks":              meta(e, "Weeks"),
+                    "Semester":           meta(e, "Semester"),
                 })
-
-        return pd.DataFrame(
-            rows,
-            columns=["Event ID", "Room", "Timeslot", "Source", "Event Size", "Room Capacity", "Duration (minutes)"],
-        )
-
-
+    
+        return pd.DataFrame(rows, columns=[
+            "Event ID", "Room", "Timeslot", "Source", "Event Size", "Room Capacity",
+            "Event Name", "Event Type", "Module Code", "Module Name",
+            "Duration (minutes)", "Weeks", "Semester",
+        ])
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------

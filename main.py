@@ -62,6 +62,7 @@ def write_flat_solution(sol: pd.DataFrame, path: Path) -> None:
     col_order = [
         "Event ID", "Event Name", "Event Type", "Module Code", "Module Name",
         "Room", "Timeslot", "Source", "Event Size", "Room Capacity",
+        "Duration (minutes)", "Weeks", "Semester",
     ]
     cols = [c for c in col_order if c in sol.columns]
     sol[cols].to_excel(path, index=False)

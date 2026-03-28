@@ -24,6 +24,7 @@ class TimetablerSets:
     room_cap: dict              # {room_id: capacity}
     room_type: dict             # {room_id: room_type}
     fixed_vet: dict             # {event_id: [(room, ts), ...]}
+    campus: dict
     fixed_non_vet: dict         # {event_id: [(room, ts), ...]}
     locked_occupancy: dict      # {(r, t): count}
     locked_core_classes: dict   # {(year, prog_code, t): set(module_codes)}
@@ -66,6 +67,8 @@ def build_sets_from_frames(
     )
     
     room_type = (rooms_raw.dropna(subset=["Id"]).set_index("Id")["Specialist room type"].to_dict()) 
+    
+    campus = (rooms_raw.dropna(subset=["Id"]).set_index("Id")["Campus"].to_dict()) 
     
     vet_room_set = set(R)
 
@@ -269,4 +272,5 @@ def build_sets_from_frames(
         rooms_raw=rooms_raw,
         pc_raw=pc_raw,
         warnings=warnings,
+        campus = campus
     )
