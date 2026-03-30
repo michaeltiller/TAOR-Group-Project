@@ -1,12 +1,11 @@
 """
-Heatmap Comparison: Event Distribution Across Three Timetables (Weeks 9-10)
-============================================================================
-Compares vet school event density (day × timeslot) for:
-  - Original_Data.xlsx         (original university timetable)
-  - MILP_only.xlsx             (MILP solver output)
+Heatmap Comparison: Event Distribution Across Two Timetables (Weeks 9-10)
+==========================================================================
+Compares event density (day × hour) for:
+  - Original_Data.xlsx                          (original university timetable)
   - proposedTimetable/improved_weeks_9_10.xlsx  (MILP + Simulated Annealing)
 
-All three panels share the same colour scale for direct visual comparison.
+Both panels share the same colour scale for direct visual comparison.
 Output: plots/heatmap_comparison_weeks_9_10.png
 """
 
@@ -16,9 +15,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from utils import DAY_ORDER, parse_timeslot, parse_weeks
+from utils import DAY_ORDER, HOUR_ORDER, parse_timeslot, parse_weeks
 
 WORKDAYS = [d for d in DAY_ORDER if d in {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'}]
+DAYTIME_HOURS = [h for h in HOUR_ORDER if h <= '17:00']
 TARGET_WEEKS = {9, 10}
 PLOTS_DIR = Path("plots")
 
@@ -42,33 +42,24 @@ def load_sa(path: Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Pivot builder
+# Pivot builder  (rows=Days, columns=Hours — matches 03_event_distribution style)
 # ---------------------------------------------------------------------------
 
-def compute_hour_order(dfs: list) -> list:
-    hours = set()
-    for df in dfs:
-        for ts in df['Timeslot'].dropna():
-            _, hour = parse_timeslot(ts)
-            if hour:
-                hours.add(hour)
-    return sorted(hours)
-
-
-def build_pivot(df: pd.DataFrame, hour_order: list) -> pd.DataFrame:
+def build_pivot(df: pd.DataFrame) -> pd.DataFrame:
     parsed = df['Timeslot'].apply(parse_timeslot)
     df = df.copy()
     df['Day'] = parsed.apply(lambda x: x[0])
     df['Hour'] = parsed.apply(lambda x: x[1])
     df = df.dropna(subset=['Day', 'Hour'])
-    df = df[df['Day'].isin(WORKDAYS)]
+    df = df[df['Day'].isin(WORKDAYS) & df['Hour'].isin(DAYTIME_HOURS)]
 
     pivot = (
-        df.groupby(['Hour', 'Day'])
+        df.groupby(['Day', 'Hour'])
         .size()
         .unstack(fill_value=0)
-        .reindex(index=hour_order, columns=WORKDAYS, fill_value=0)
+        .reindex(index=WORKDAYS, columns=DAYTIME_HOURS, fill_value=0)
     )
+    # Drop columns (hours) that are empty across both timetables — keep layout clean
     return pivot
 
 
@@ -77,13 +68,13 @@ def build_pivot(df: pd.DataFrame, hour_order: list) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def plot_heatmaps(pivots: list, titles: list, output_path: Path) -> None:
+    # Drop hours with no events in either timetable
+    active_hours = [h for h in DAYTIME_HOURS if any(p[h].sum() > 0 for p in pivots if h in p.columns)]
+    pivots = [p.reindex(columns=active_hours, fill_value=0) for p in pivots]
+
     global_max = max(int(p.values.max()) for p in pivots)
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 8))
-    fig.suptitle(
-        "Vet School Event Distribution — Weeks 9–10",
-        fontsize=15, fontweight='bold', y=1.02
-    )
+    fig, axes = plt.subplots(len(pivots), 1, figsize=(13, 5 * len(pivots)))
 
     for i, (ax, pivot, title) in enumerate(zip(axes, pivots, titles)):
         is_last = (i == len(pivots) - 1)
@@ -95,21 +86,15 @@ def plot_heatmaps(pivots: list, titles: list, output_path: Path) -> None:
             cmap='YlOrRd',
             annot=True,
             fmt='d',
-            linewidths=0.4,
-            linecolor='lightgrey',
+            linewidths=0.5,
             cbar=is_last,
-            cbar_kws={'label': 'Number of Events', 'shrink': 0.8} if is_last else None,
+            cbar_kws={'label': 'Number of Events'} if is_last else None,
         )
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=8)
-        ax.set_xlabel('Day', fontsize=10)
-        ax.tick_params(axis='x', rotation=30)
+        ax.set_title(title, fontsize=13, fontweight='bold')
+        ax.set_xlabel('Hour' if is_last else '', fontsize=12)
+        ax.set_ylabel('Day', fontsize=12)
+        ax.tick_params(axis='x', rotation=0)
         ax.tick_params(axis='y', rotation=0)
-
-        if i == 0:
-            ax.set_ylabel('Timeslot', fontsize=10)
-        else:
-            ax.set_ylabel('')
-            ax.set_yticklabels([])
 
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,11 +111,9 @@ def main():
     df_orig = load_original(Path("Original_Data.xlsx"))
     df_sa   = load_sa(Path("proposedTimetable/improved_weeks_9_10.xlsx"))
 
-    hour_order = compute_hour_order([df_orig, df_sa])
-
     pivots = [
-        build_pivot(df_orig, hour_order),
-        build_pivot(df_sa,   hour_order),
+        build_pivot(df_orig),
+        build_pivot(df_sa),
     ]
 
     labels = ["Original", "SA"]
