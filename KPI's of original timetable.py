@@ -133,8 +133,21 @@ for i in weeks:
             subset = core_df[core_df["Module Code"].isin(mods_set)]
             ts_mod = subset.groupby("Timeslot")["Module Code"].nunique()
             for ts, count in ts_mod[ts_mod > 1].items():
+                events_at_ts = subset[subset["Timeslot"] == ts]
+                # Skip if all conflicting events are tutorials — cohort is split across
+                # parallel tutorial groups, so no individual student is double-booked.
+                if "Event Type" in events_at_ts.columns:
+                    all_tutorials = (
+                        events_at_ts["Event Type"]
+                        .str.strip()
+                        .str.lower()
+                        .str.contains("tutorial")
+                        .all()
+                    )
+                    if all_tutorials:
+                        continue
                 c2_clashes += 1
-                mods_at_ts = sorted(subset[subset["Timeslot"] == ts]["Module Code"].unique())
+                mods_at_ts = sorted(events_at_ts["Module Code"].unique())
                 clashing_slots.append((year, prog, ts, mods_at_ts))
     
         print(f"\n  C2 core module clashes:         {c2_clashes}")
