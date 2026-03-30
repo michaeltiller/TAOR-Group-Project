@@ -19,7 +19,6 @@ import seaborn as sns
 from utils import DAY_ORDER, parse_timeslot, parse_weeks
 
 WORKDAYS = [d for d in DAY_ORDER if d in {'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'}]
-VET_PREFIXES = ('BVMS', 'AWAB')
 TARGET_WEEKS = {9, 10}
 PLOTS_DIR = Path("plots")
 
@@ -28,31 +27,18 @@ PLOTS_DIR = Path("plots")
 # Loaders
 # ---------------------------------------------------------------------------
 
-def _is_vet(df: pd.DataFrame) -> pd.Series:
-    return df['Module Code'].astype(str).str.startswith(VET_PREFIXES)
-
-
 def _in_target_weeks(df: pd.DataFrame) -> pd.Series:
     return df['Weeks'].apply(lambda v: bool(parse_weeks(v) & TARGET_WEEKS))
 
 
 def load_original(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name='Sheet1')
-    mask = _is_vet(df) & _in_target_weeks(df)
-    return df[mask].copy()
-
-
-def load_milp(path: Path) -> pd.DataFrame:
-    df = pd.read_excel(path, sheet_name='Sheet1')
-    df = df.iloc[1:].reset_index(drop=True)  # row 0 is solver summary metadata
-    mask = _is_vet(df) & _in_target_weeks(df)
-    return df[mask].copy()
+    return df[_in_target_weeks(df)].copy()
 
 
 def load_sa(path: Path) -> pd.DataFrame:
     # File is already scoped to weeks 9-10 and has no Weeks column
-    df = pd.read_excel(path, sheet_name='Sheet1')
-    return df[_is_vet(df)].copy()
+    return pd.read_excel(path, sheet_name='Sheet1').copy()
 
 
 # ---------------------------------------------------------------------------
@@ -138,22 +124,20 @@ def plot_heatmaps(pivots: list, titles: list, output_path: Path) -> None:
 
 def main():
     df_orig = load_original(Path("Original_Data.xlsx"))
-    df_milp = load_milp(Path("MILP_only.xlsx"))
     df_sa   = load_sa(Path("proposedTimetable/improved_weeks_9_10.xlsx"))
 
-    hour_order = compute_hour_order([df_orig, df_milp, df_sa])
+    hour_order = compute_hour_order([df_orig, df_sa])
 
     pivots = [
         build_pivot(df_orig, hour_order),
-        build_pivot(df_milp, hour_order),
         build_pivot(df_sa,   hour_order),
     ]
 
-    labels = ["Original", "MILP", "SA"]
-    for label, df, pivot in zip(labels, [df_orig, df_milp, df_sa], pivots):
+    labels = ["Original", "SA"]
+    for label, df, pivot in zip(labels, [df_orig, df_sa], pivots):
         print(f"{label:8s}: {len(df):4d} events  |  pivot total = {int(pivot.values.sum())}")
 
-    titles = ["Original Timetable", "MILP Solution", "MILP + Simulated Annealing"]
+    titles = ["Original Timetable", "MILP + Simulated Annealing"]
     plot_heatmaps(pivots, titles, PLOTS_DIR / "heatmap_comparison_weeks_9_10.png")
 
 
