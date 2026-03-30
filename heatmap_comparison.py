@@ -77,7 +77,6 @@ def plot_heatmaps(pivots: list, titles: list, output_path: Path) -> None:
     fig, axes = plt.subplots(len(pivots), 1, figsize=(13, 5 * len(pivots)))
 
     for i, (ax, pivot, title) in enumerate(zip(axes, pivots, titles)):
-        is_last = (i == len(pivots) - 1)
         sns.heatmap(
             pivot,
             ax=ax,
@@ -87,16 +86,21 @@ def plot_heatmaps(pivots: list, titles: list, output_path: Path) -> None:
             annot=True,
             fmt='d',
             linewidths=0.5,
-            cbar=is_last,
-            cbar_kws={'label': 'Number of Events'} if is_last else None,
+            cbar=False,
         )
         ax.set_title(title, fontsize=13, fontweight='bold')
-        ax.set_xlabel('Hour' if is_last else '', fontsize=12)
+        ax.set_xlabel('Hour' if i == len(pivots) - 1 else '', fontsize=12)
         ax.set_ylabel('Day', fontsize=12)
         ax.tick_params(axis='x', rotation=0)
         ax.tick_params(axis='y', rotation=0)
 
-    plt.tight_layout()
+    # Single shared colorbar on the right, sized to span all subplots
+    import matplotlib as mpl
+    norm = mpl.colors.Normalize(vmin=0, vmax=global_max)
+    sm = mpl.cm.ScalarMappable(cmap='YlOrRd', norm=norm)
+    sm.set_array([])
+    fig.colorbar(sm, ax=axes.tolist(), label='Number of Events', shrink=0.6)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
