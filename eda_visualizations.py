@@ -101,6 +101,62 @@ def plot_room_utilization(df, output_dir):
     plt.close()
     print("  Saved: 01_room_utilization.png")
 
+def plot_event_distribution_by_week(df, output_dir):
+    """
+    Plot 3: Heatmap of simultaneous events by day and hour (09:00–17:00).
+    Creates separate plots for week 9 and week 10.
+    """
+    daytime_hours = [h for h in HOUR_ORDER if h <= "17:00"]
+    valid = df.dropna(subset=["Day", "Hour", "Weeks"])
+    valid = valid[valid["Hour"].isin(daytime_hours)]
+
+    if valid.empty:
+        print("  Skipped: week 9 & 10 event distribution plots (no daytime events)")
+        return
+
+    for week in [9, 10]:
+        # Split weeks string by comma and check if week is in the list
+        week_data = valid[valid["Weeks"].apply(
+            lambda x: str(week) in [w.strip() for w in str(x).split(',')]
+        )]
+        
+        if week_data.empty:
+            print(f"  Skipped: week {week} event distribution (no events for week {week})")
+            continue
+        
+        heatmap_data = week_data.groupby(["Day", "Hour"]).size().unstack(fill_value=0)
+
+        # Reorder days and hours
+        days_present = [d for d in DAY_ORDER if d in heatmap_data.index]
+        hours_present = [h for h in HOUR_ORDER if h in heatmap_data.columns]
+        heatmap_data = heatmap_data.reindex(
+            index=days_present, columns=hours_present, fill_value=0
+        )
+
+        fig, ax = plt.subplots(figsize=(13, 5))
+
+        sns.heatmap(
+            heatmap_data,
+            annot=True,
+            fmt="d",
+            cmap="YlOrRd",
+            ax=ax,
+            linewidths=0.5,
+            cbar_kws={"label": "Number of Events"},
+        )
+
+        ax.set_xlabel("Hour", fontsize=12)
+        ax.set_ylabel("Day", fontsize=12)
+        ax.set_title(
+            f"Event Distribution by Day & Hour (Week {week}, 09:00–17:00)", 
+            fontsize=13, 
+            fontweight="bold"
+        )
+
+        plt.tight_layout()
+        plt.savefig(output_dir / f"06_event_distribution_week{week}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"  Saved: 06_event_distribution_week{week}.png")
 
 def plot_fill_ratio(df, output_dir):
     """Plot 2: Two-panel fill ratio analysis (histogram + category breakdown)."""
@@ -367,7 +423,7 @@ def main(df, output_dir="plots"):
 
     print(f"  Rows: {len(df)}")
     print(f"  Rooms: {df['Room'].nunique()}")
-    print(f"  Modules: {df['Module Code'].nunique()}")
+    # print(f"  Modules: {df['Module Code'].nunique()}")
 
     print("\nGenerating visualizations...\n")
     plot_room_utilization(df, output_dir)
@@ -375,6 +431,7 @@ def main(df, output_dir="plots"):
     plot_event_distribution(df, output_dir)
     plot_busiest_rooms(df, output_dir)
     plot_busiest_modules(df, output_dir)
+    plot_event_distribution_by_week(df, output_dir)
 
     print("\n" + "=" * 60)
     print(f"COMPLETE! Plots saved to {output_dir}/ directory.")

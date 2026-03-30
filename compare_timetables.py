@@ -110,7 +110,7 @@ def enrich_if_needed(df: pd.DataFrame, fallback_weeks=None) -> pd.DataFrame:
         compulsory_modules = set(
             prog_course.loc[prog_course["Compulsory"] == True, "ModuleId"]
         )
-        df["Core"] = df["Module Code"].isin(compulsory_modules)
+        df["Core"] = df["ModuleID"].isin(compulsory_modules)
     else:
         df["Core"] = False
 
